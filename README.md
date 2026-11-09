@@ -26,7 +26,7 @@ You also get one notification when you are logged out.
 brew install glab
 brew install --cask swiftbar
 glab auth login
-git clone <this repository> ~/mr-radar
+git clone https://github.com/kevalo-be/mr-radar.git ~/mr-radar
 ```
 
 Open SwiftBar and choose `~/mr-radar` as the plugin folder.
