@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
-# <swiftbar.title>MR Radar</swiftbar.title>
-# <swiftbar.desc>Open GitLab merge requests where you are a reviewer.</swiftbar.desc>
+# <xbar.title>MR Radar</xbar.title>
+# <xbar.version>v1.0</xbar.version>
+# <xbar.author>Kevin Van Loo</xbar.author>
+# <xbar.author.github>kevalo-be</xbar.author.github>
+# <xbar.desc>Lists the open GitLab merge requests you review or follow, with notifications.</xbar.desc>
+# <xbar.dependencies>python3,glab</xbar.dependencies>
+# <xbar.abouturl>https://github.com/kevalo-be/mr-radar</xbar.abouturl>
 # <swiftbar.hideRunInTerminal>true</swiftbar.hideRunInTerminal>
 # <swiftbar.hideDisablePlugin>true</swiftbar.hideDisablePlugin>
 import json
