@@ -137,9 +137,7 @@ def render(me, rows, red_after=RED_AFTER, own=(), hide_approved=False):
     for icon, mr in rows:
         lines.append(f"{icon} {short(mr['title'])} | href={mr['web_url']} "
                      + tip(f"{mr['references']['full']} · {mr['author']['name']}"))
-    if hide_approved and approved:
-        lines.append(f"🟢 {approved} approved by me hidden · click to show | {toggle}")
-    elif not rows:
+    if not rows:
         lines.append("Nothing to review")
     if own:
         lines += ["---", "My merge requests"]
@@ -310,14 +308,11 @@ def selftest():
     mixed = [("🟢", mr(1, "done", "1")), ("🟢", mr(2, "done too", "2")), ("🟠", mr(3, "pushed", "3"))]
     shown = render("me", mixed).splitlines()
     assert any(l.startswith("Hide approved by me (2) |") and "param2=on" in l for l in shown), "the label counts what it hides"
-    assert not any("approved by me hidden" in l for l in shown)
     hidden = render("me", mixed, hide_approved=True).splitlines()
-    assert hidden[2].startswith("🟠"), "only 🟢 is hidden: " + str(hidden[:4])
-    assert hidden[3].startswith("🟢 2 approved by me hidden · click to show |") and "param2=off" in hidden[3], hidden[3]
+    assert hidden[2].startswith("🟠") and hidden[3] == "---", "🟢 is hidden without a line of its own: " + str(hidden[:4])
+    assert not any(l.startswith("🟢") for l in hidden[2:]), hidden
     assert any(l.startswith("Show approved by me (2 hidden) |") and "param2=off" in l for l in hidden), hidden
-    only_approved = render("me", mixed[:1], hide_approved=True).splitlines()
-    assert only_approved[2].startswith("🟢 1 approved by me hidden"), "not 'Nothing to review' while MRs are hidden"
-    assert render("me", [], hide_approved=True).splitlines()[2] == "Nothing to review"
+    assert render("me", mixed[:2], hide_approved=True).splitlines()[2] == "Nothing to review"
     with tempfile.TemporaryDirectory() as tmp:
         last = pathlib.Path(tmp) / "last-fetch.json"
         mark_rerender(last)
@@ -326,7 +321,7 @@ def selftest():
         assert rerender(last, True) is None, "a scheduled run fetches from GitLab"
         mark_rerender(last)
         quick = rerender(last, True).splitlines()
-        assert quick[3].startswith("🟢 2 approved by me hidden"), "a click redraws with the new setting: " + str(quick[:4])
+        assert "Show approved by me (2 hidden)" in "\n".join(quick), "a click redraws with the new setting: " + str(quick)
         assert rerender(last, True) is None, "only the run right after the click skips GitLab"
     print("selftest ok")
 

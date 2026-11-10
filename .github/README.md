@@ -89,8 +89,8 @@ The plugin saves your choice in `~/.config/mr-radar/settings.json`.
 
 The menu item "Hide approved by me" hides the 🟢 merge requests: you approved them, and nothing was pushed since.
 The item shows how many merge requests it hides, for example `Hide approved by me (3)`.
-While they are hidden, the list shows `🟢 3 approved by me hidden · click to show`, and the item reads `Show approved by me (3 hidden)`.
-Click either line to show them again.
+While they are hidden, the item reads `Show approved by me (3 hidden)`.
+Click it to show them again.
 🟠 merge requests stay visible, because they have new commits to look at.
 "My merge requests" is not affected.
 The plugin saves the choice in `~/.config/mr-radar/settings.json`.
