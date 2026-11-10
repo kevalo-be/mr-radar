@@ -124,6 +124,9 @@ def tip(text):
 def render(me, rows, red_after=RED_AFTER, own=(), hide_approved=False):
     """rows: list of (icon, mr), own: list of (icon, open threads, mr). Returns SwiftBar output."""
     rows = sorted(rows, key=lambda r: (ORDER[r[0]], r[1]["updated_at"]))
+    approved = sum(1 for icon, _ in rows if icon == "🟢")
+    toggle = (f"bash={pathlib.Path(__file__).resolve()} param1=--hide-approved "
+              f"param2={'off' if hide_approved else 'on'} terminal=false refresh=true")
     if hide_approved:
         rows = [r for r in rows if r[0] != "🟢"]
     own = sorted(own, key=lambda r: (ORDER[r[0]], r[2]["updated_at"]))
@@ -133,7 +136,9 @@ def render(me, rows, red_after=RED_AFTER, own=(), hide_approved=False):
     for icon, mr in rows:
         lines.append(f"{icon} {short(mr['title'])} | href={mr['web_url']} "
                      + tip(f"{mr['references']['full']} · {mr['author']['name']}"))
-    if not rows:
+    if hide_approved and approved:
+        lines.append(f"🟢 {approved} approved by me hidden · click to show | {toggle}")
+    elif not rows:
         lines.append("Nothing to review")
     if own:
         lines += ["---", "My merge requests"]
@@ -145,8 +150,7 @@ def render(me, rows, red_after=RED_AFTER, own=(), hide_approved=False):
     lines += ["---", f"Open GitLab dashboard | href={DASHBOARD.format(me)}",
               f"Open my merge requests | href={MY_DASHBOARD.format(me)}",
               f"Edit people… | bash=/usr/bin/open param1=-t param2={PEOPLE} terminal=false",
-              f"Hide approved | bash={pathlib.Path(__file__).resolve()} param1=--hide-approved "
-              f"param2={'off' if hide_approved else 'on'} terminal=false refresh=true checked={str(hide_approved).lower()}"]
+              (f"Show approved by me ({approved} hidden)" if hide_approved else f"Hide approved by me ({approved})") + f" | {toggle}"]
     minutes = red_after // timedelta(minutes=1)
     label = next((l for l, m in RED_AFTER_CHOICES.items() if m == minutes), f"{minutes}m")
     lines.append(f"Red after: {label}")
@@ -275,12 +279,17 @@ def selftest():
     menu = render("me", [], timedelta(minutes=30)).splitlines()
     assert "Red after: 30m" in menu, menu
     assert [l for l in menu if "checked=true" in l] == [next(l for l in menu if l.startswith("--30m"))]
-    assert any(l.startswith("Hide approved |") and "param2=on" in l for l in menu), "the toggle turns hiding on"
-    mixed = [("🟢", mr(1, "done", "1")), ("🟠", mr(3, "pushed", "3"))]
+    mixed = [("🟢", mr(1, "done", "1")), ("🟢", mr(2, "done too", "2")), ("🟠", mr(3, "pushed", "3"))]
+    shown = render("me", mixed).splitlines()
+    assert any(l.startswith("Hide approved by me (2) |") and "param2=on" in l for l in shown), "the label counts what it hides"
+    assert not any("approved by me hidden" in l for l in shown)
     hidden = render("me", mixed, hide_approved=True).splitlines()
-    assert [l[0] for l in hidden[2:3]] == ["🟠"] and hidden[3] == "---", "only 🟢 is hidden: " + str(hidden[:4])
-    assert any(l.startswith("Hide approved |") and "param2=off" in l and "checked=true" in l for l in hidden)
-    assert render("me", mixed[:1], hide_approved=True).splitlines()[2] == "Nothing to review"
+    assert hidden[2].startswith("🟠"), "only 🟢 is hidden: " + str(hidden[:4])
+    assert hidden[3].startswith("🟢 2 approved by me hidden · click to show |") and "param2=off" in hidden[3], hidden[3]
+    assert any(l.startswith("Show approved by me (2 hidden) |") and "param2=off" in l for l in hidden), hidden
+    only_approved = render("me", mixed[:1], hide_approved=True).splitlines()
+    assert only_approved[2].startswith("🟢 1 approved by me hidden"), "not 'Nothing to review' while MRs are hidden"
+    assert render("me", [], hide_approved=True).splitlines()[2] == "Nothing to review"
     print("selftest ok")
 
 
@@ -289,7 +298,7 @@ if __name__ == "__main__":
         selftest()
     elif "--red-after" in sys.argv:  # clicked in the "Red after" submenu
         save_red_after(SETTINGS, sys.argv[sys.argv.index("--red-after") + 1])
-    elif "--hide-approved" in sys.argv:  # clicked "Hide approved"
+    elif "--hide-approved" in sys.argv:  # clicked "Hide approved by me"
         save_setting(SETTINGS, "hide_approved", sys.argv[sys.argv.index("--hide-approved") + 1] == "on")
     else:
         main()
