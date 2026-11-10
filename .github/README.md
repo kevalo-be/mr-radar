@@ -107,6 +107,8 @@ Therefore it uses your existing `glab` login and needs no token of its own.
 - For each of your own merge requests, it reads the threads, and the approvals when no thread is open.
 
 The plugin keeps the merge requests and threads it already notified about in `~/Library/Caches/mr-radar.json`.
+It keeps the result of the last GitLab fetch in `~/Library/Caches/mr-radar-last-fetch.json`.
+A click on "Hide approved by me" redraws the menu from that file, so the menu updates immediately.
 
 ## Limitations
 

@@ -21,6 +21,7 @@ from urllib.parse import quote, urlencode
 # SwiftBar runs plugins without Homebrew on the PATH: Apple Silicon, then Intel.
 GLAB = shutil.which("glab", path="/opt/homebrew/bin:/usr/local/bin") or "glab"
 STATE = pathlib.Path.home() / "Library/Caches/mr-radar.json"
+LAST_FETCH = pathlib.Path.home() / "Library/Caches/mr-radar-last-fetch.json"  # redraws a toggle click without GitLab
 PEOPLE = pathlib.Path.home() / ".config/mr-radar/people"
 PEOPLE_TEMPLATE = """\
 # MR Radar shows the open merge requests of the GitLab users below.
@@ -179,7 +180,32 @@ def notify(text, href=None):
     subprocess.run(["/usr/bin/open", "-g", "swiftbar://notify?" + urlencode(params, quote_via=quote)])
 
 
+def mark_rerender(path):
+    try:
+        data = json.loads(path.read_text())
+    except (FileNotFoundError, ValueError):
+        return  # nothing fetched yet: SwiftBar's refresh fetches
+    path.write_text(json.dumps({**data, "rerender": True}))
+
+
+def rerender(path, hide_approved):
+    """The menu from the last fetch when a toggle click asked for it, else None: fetch from GitLab."""
+    try:
+        data = json.loads(path.read_text())
+    except (FileNotFoundError, ValueError):
+        return None
+    if not data.get("rerender"):
+        return None
+    path.write_text(json.dumps({**data, "rerender": False}))
+    return render(data["me"], data["rows"], timedelta(minutes=data["red_after_minutes"]), data["own"], hide_approved)
+
+
 def main():
+    hide_approved = load_settings(SETTINGS).get("hide_approved") is True
+    menu = rerender(LAST_FETCH, hide_approved)
+    if menu:
+        print(menu)
+        return
     state = json.loads(STATE.read_text()) if STATE.exists() else {"seen": [], "logged_in": True}
     try:
         me = api("user")["username"]
@@ -205,7 +231,9 @@ def main():
         print(f"⚠️ MR\n---\n{str(e).splitlines()[0][:80]}\nRefresh | refresh=true")
         return
 
-    print(render(me, rows, red_after, own_rows, load_settings(SETTINGS).get("hide_approved") is True))
+    print(render(me, rows, red_after, own_rows, hide_approved))
+    LAST_FETCH.write_text(json.dumps({"me": me, "rows": rows, "own": own_rows,
+                                      "red_after_minutes": red_after // timedelta(minutes=1)}))
     todo = {f"{mr['id']}{icon}": (icon, mr) for icon, mr in rows if icon in ("🔴", "🟠")}
     for key in todo.keys() - set(state["seen"]):
         icon, mr = todo[key]
@@ -290,6 +318,16 @@ def selftest():
     only_approved = render("me", mixed[:1], hide_approved=True).splitlines()
     assert only_approved[2].startswith("🟢 1 approved by me hidden"), "not 'Nothing to review' while MRs are hidden"
     assert render("me", [], hide_approved=True).splitlines()[2] == "Nothing to review"
+    with tempfile.TemporaryDirectory() as tmp:
+        last = pathlib.Path(tmp) / "last-fetch.json"
+        mark_rerender(last)
+        assert not last.exists() and rerender(last, True) is None, "without a fetch, a click leaves the fetch to SwiftBar"
+        last.write_text(json.dumps({"me": "me", "rows": mixed, "own": [], "red_after_minutes": 60}))
+        assert rerender(last, True) is None, "a scheduled run fetches from GitLab"
+        mark_rerender(last)
+        quick = rerender(last, True).splitlines()
+        assert quick[3].startswith("🟢 2 approved by me hidden"), "a click redraws with the new setting: " + str(quick[:4])
+        assert rerender(last, True) is None, "only the run right after the click skips GitLab"
     print("selftest ok")
 
 
@@ -300,5 +338,6 @@ if __name__ == "__main__":
         save_red_after(SETTINGS, sys.argv[sys.argv.index("--red-after") + 1])
     elif "--hide-approved" in sys.argv:  # clicked "Hide approved by me"
         save_setting(SETTINGS, "hide_approved", sys.argv[sys.argv.index("--hide-approved") + 1] == "on")
+        mark_rerender(LAST_FETCH)  # SwiftBar's refresh=true then redraws from the last fetch
     else:
         main()
