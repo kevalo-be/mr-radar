@@ -92,7 +92,8 @@ def render(me, rows, red_after=RED_AFTER):
     lines = [" ".join(f"{c} {count[c]}" for c in ("🔴", "🟠") if count[c]) or "🟢", "---"]
     for icon, mr in rows:
         title = mr["title"].replace("|", "¦")
-        lines.append(f"{icon} {title} | href={mr['web_url']} length=70")
+        tip = f"{title} · {mr['author']['name']}".replace('"', "'")  # the length=70 tooltip shows only the title
+        lines.append(f"{icon} {title} | href={mr['web_url']} length=70 tooltip=\"{tip}\"")
         lines.append(f"--{mr['references']['full']} · {mr['author']['name']} | href={mr['web_url']}")
     if not rows:
         lines.append("Nothing to review")
@@ -156,6 +157,7 @@ def selftest():
     assert is_older("2026-11-09T10:59:00.000Z", RED_AFTER, now)
     assert not is_older("2026-11-09T11:30:00.000Z", RED_AFTER, now)
     assert "a¦b |" in lines[2], "a pipe in a title must not break the SwiftBar line"
+    assert 'tooltip="a¦b · A"' in lines[2], "the hover must name the author: " + lines[2]
     assert render("me", []).splitlines()[0] == "🟢"
     with tempfile.TemporaryDirectory() as tmp:
         path = pathlib.Path(tmp) / "sub/people"
