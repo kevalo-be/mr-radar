@@ -105,6 +105,10 @@ def short(title):
     return title[:70] + "…" if len(title) > 70 else title
 
 
+def tip(text):
+    return 'tooltip="' + text.replace('"', "'") + '"'  # a " would end SwiftBar's quoted value
+
+
 def render(me, rows, red_after=RED_AFTER, own=()):
     """rows: list of (icon, mr), own: list of (icon, open threads, mr). Returns SwiftBar output."""
     rows = sorted(rows, key=lambda r: (ORDER[r[0]], r[1]["updated_at"]))
@@ -113,8 +117,8 @@ def render(me, rows, red_after=RED_AFTER, own=()):
     count["💬"] = sum(len(threads) for _, threads, _ in own)
     lines = [" ".join(f"{c} {count[c]}" for c in ("🔴", "🟠", "💬") if count[c]) or "🟢", "---"]
     for icon, mr in rows:
-        lines.append(f"{icon} {short(mr['title'])} | href={mr['web_url']}")
-        lines.append(f"--{mr['references']['full']} · {mr['author']['name']} | href={mr['web_url']}")
+        lines.append(f"{icon} {short(mr['title'])} | href={mr['web_url']} "
+                     + tip(f"{mr['references']['full']} · {mr['author']['name']}"))
     if not rows:
         lines.append("Nothing to review")
     if own:
@@ -122,8 +126,8 @@ def render(me, rows, red_after=RED_AFTER, own=()):
     for icon, threads, mr in own:
         n = len(threads)
         suffix = f" 💬 {n}" if n else ""
-        lines.append(f"{icon} {short(mr['title'])}{suffix} | href={mr['web_url']}")
-        lines.append(f"--{mr['references']['full']} · {n} open thread{'' if n == 1 else 's'} | href={mr['web_url']}")
+        lines.append(f"{icon} {short(mr['title'])}{suffix} | href={mr['web_url']} "
+                     + tip(f"{mr['references']['full']} · {n} open thread{'' if n == 1 else 's'}"))
     lines += ["---", f"Open GitLab dashboard | href={DASHBOARD.format(me)}",
               f"Open my merge requests | href={MY_DASHBOARD.format(me)}",
               f"Edit people… | bash=/usr/bin/open param1=-t param2={PEOPLE} terminal=false"]
@@ -199,13 +203,18 @@ def selftest():
                         ("🔴", mr(2, "a|b", "2")), ("🟠", mr(3, "pushed", "3"))])
     lines = out.splitlines()
     assert lines[0] == "🔴 1 🟠 1", "fresh MRs must not count in the menu bar: " + lines[0]
-    assert [l[0] for l in lines[2:9:2]] == ["🔴", "🟠", "⚪", "🟢"], lines
+    assert [l[0] for l in lines[2:6]] == ["🔴", "🟠", "⚪", "🟢"], lines
+    assert lines[6] == "---", "an MR has a tooltip, not a submenu line under it: " + lines[6]
     now = datetime(2026, 11, 9, 12, 0, tzinfo=timezone.utc)
     assert is_older("2026-11-09T10:59:00.000Z", RED_AFTER, now)
     assert not is_older("2026-11-09T11:30:00.000Z", RED_AFTER, now)
     assert "a¦b |" in lines[2], "a pipe in a title must not break the SwiftBar line"
     long = render("me", [("🔴", mr(5, "x" * 80, "5"))]).splitlines()[2]
-    assert long == f"🔴 {'x' * 70}… | href=u", "a long title is cut without a hover tooltip: " + long
+    assert long == f'🔴 {"x" * 70}… | href=u tooltip="g/p!1 · A"', \
+        "a long title is cut, and the tooltip names project and author instead of the full title: " + long
+    quoted = {**mr(5, "q", "5"), "author": {"name": 'A "B"'}}
+    assert render("me", [("🔴", quoted)]).splitlines()[2].endswith("tooltip=\"g/p!1 · A 'B'\""), \
+        "a quote in a name must not end the tooltip"
     assert render("me", []).splitlines()[0] == "🟢"
     note = lambda resolvable, resolved: {"notes": [{"resolvable": resolvable, "resolved": resolved}]}
     threads = [note(True, False), note(True, True), note(False, False)]
@@ -214,12 +223,12 @@ def selftest():
     menu = render("me", [("🔴", mr(2, "a", "2")), ("🟠", mr(3, "b", "3"))], RED_AFTER, own).splitlines()
     assert menu[0] == "🔴 1 🟠 1 💬 2", menu[0]
     section = menu[menu.index("My merge requests") + 1:]
-    assert section[0] == f"🔴 {'x' * 70}… 💬 2 | href=u", "the thread count follows the cut title: " + section[0]
-    assert section[1] == "--g/p!1 · 2 open threads | href=u", section[1]
-    assert section[2] == "🟢 approved | href=u", "no 💬 suffix without open threads: " + section[2]
-    assert section[3] == "--g/p!1 · 0 open threads | href=u", section[3]
+    assert section[0] == f'🔴 {"x" * 70}… 💬 2 | href=u tooltip="g/p!1 · 2 open threads"', \
+        "the thread count follows the cut title: " + section[0]
+    assert section[1] == '🟢 approved | href=u tooltip="g/p!1 · 0 open threads"', \
+        "no 💬 suffix without open threads: " + section[1]
     assert render("me", [], RED_AFTER, own).splitlines()[0] == "💬 2"
-    assert "· 1 open thread |" in render("me", [], RED_AFTER, [("🔴", threads[:1], mr(8, "c", "8"))])
+    assert '· 1 open thread"' in render("me", [], RED_AFTER, [("🔴", threads[:1], mr(8, "c", "8"))])
     assert render("me", [], RED_AFTER, own[:1]).splitlines()[0] == "🟢"
     assert "My merge requests" not in render("me", []), "no section without MRs of your own"
     by = lambda i, who: {"id": i, "notes": [{"author": {"username": who}}]}
