@@ -27,9 +27,13 @@ brew install glab
 brew install --cask swiftbar
 glab auth login
 git clone https://github.com/kevalo-be/mr-radar.git ~/mr-radar
+mkdir -p ~/swiftbar
+ln -s ~/mr-radar/mr-radar.2m.py ~/swiftbar/
 ```
 
-Open SwiftBar and choose `~/mr-radar` as the plugin folder.
+Open SwiftBar and choose `~/swiftbar` as the plugin folder.
+SwiftBar runs every plugin in that folder, so you can add other plugins next to MR Radar.
+If you already have a plugin folder, put the symlink in that folder instead.
 
 The first notification asks for permission for "Script Editor".
 macOS shows notifications from scripts under that app name.
