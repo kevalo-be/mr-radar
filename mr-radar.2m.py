@@ -16,7 +16,7 @@ import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 # SwiftBar runs plugins without Homebrew on the PATH: Apple Silicon, then Intel.
 GLAB = shutil.which("glab", path="/opt/homebrew/bin:/usr/local/bin") or "glab"
@@ -145,13 +145,14 @@ def thread_news(own, me, known):
         ids += others
         n = 0 if known is None else len(set(others) - set(known))
         if n:
-            texts.append(f"{'New comment' if n == 1 else f'{n} new comments'}: {mr['title']}")
+            texts.append((f"{'New comment' if n == 1 else f'{n} new comments'}: {mr['title']}", mr["web_url"]))
     return texts, ids
 
 
-def notify(text):
-    subprocess.run(["osascript", "-e",
-                    f'display notification {json.dumps(text, ensure_ascii=False)} with title "MR Radar"'])
+def notify(text, href=None):
+    # SwiftBar sends the alert, so a click opens href; an osascript alert would open Script Editor
+    params = {"plugin": "mr-radar", "title": "MR Radar", "body": text, **({"href": href} if href else {})}
+    subprocess.run(["/usr/bin/open", "-g", "swiftbar://notify?" + urlencode(params, quote_via=quote)])
 
 
 def main():
@@ -181,13 +182,13 @@ def main():
         return
 
     print(render(me, rows, red_after, own_rows))
-    todo = {f"{mr['id']}{icon}": (icon, mr["title"]) for icon, mr in rows if icon in ("🔴", "🟠")}
+    todo = {f"{mr['id']}{icon}": (icon, mr) for icon, mr in rows if icon in ("🔴", "🟠")}
     for key in todo.keys() - set(state["seen"]):
-        icon, title = todo[key]
-        notify(f"{'Review' if icon == '🔴' else 'New commits'}: {title}")
+        icon, mr = todo[key]
+        notify(f"{'Review' if icon == '🔴' else 'New commits'}: {mr['title']}", mr["web_url"])
     texts, thread_ids = thread_news(own_rows, me, state.get("threads"))
-    for text in texts:
-        notify(text)
+    for text, href in texts:
+        notify(text, href)
     STATE.write_text(json.dumps({"seen": list(todo), "threads": thread_ids, "logged_in": True}))
 
 
@@ -225,8 +226,8 @@ def selftest():
     news = [("🔴", [by("t1", "bob"), by("t2", "me")], mr(9, "mine", "9")),
             ("🔴", [by("t3", "bob"), by("t4", "ann")], mr(10, "other", "10"))]
     assert thread_news(news, "me", None) == ([], ["t1", "t3", "t4"]), "the first run only remembers the threads"
-    assert thread_news(news, "me", ["t1"]) == (["2 new comments: other"], ["t1", "t3", "t4"])
-    assert thread_news(news, "me", ["t3", "t4"]) == (["New comment: mine"], ["t1", "t3", "t4"]), \
+    assert thread_news(news, "me", ["t1"]) == ([("2 new comments: other", "u")], ["t1", "t3", "t4"])
+    assert thread_news(news, "me", ["t3", "t4"]) == ([("New comment: mine", "u")], ["t1", "t3", "t4"]), \
         "your own thread t2 never notifies"
     assert thread_news(news, "me", ["t1", "t3", "t4"])[0] == []
     assert len(thread_news(news, "me", [])[0]) == 2, "an empty list is a run without threads, not a first run"

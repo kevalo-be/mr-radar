@@ -36,8 +36,9 @@ SwiftBar also runs plugins in subfolders, so other plugins can sit next to `mr-r
 If you already have a plugin folder, clone into that folder instead.
 Restart SwiftBar after the clone, because SwiftBar finds a new subfolder only at startup.
 
-The first notification asks for permission for "Script Editor".
-macOS shows notifications from scripts under that app name.
+The first notification asks for permission for "SwiftBar".
+Allow it, because SwiftBar sends the notifications of MR Radar.
+Click a notification to open its merge request.
 
 To update, run `git pull` in `~/swiftbar/mr-radar`.
 
