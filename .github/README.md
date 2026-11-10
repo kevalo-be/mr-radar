@@ -85,6 +85,14 @@ The "Red after" submenu sets how old an unapproved merge request must be before 
 The choices are 15m, 30m, 1h, 2h and 4h. The default is 1h.
 The plugin saves your choice in `~/.config/mr-radar/settings.json`.
 
+## Hide approved
+
+The menu item "Hide approved" hides the 🟢 merge requests: you approved them, and nothing was pushed since.
+Click it again to show them.
+🟠 merge requests stay visible, because they have new commits to look at.
+"My merge requests" is not affected.
+The plugin saves the choice in `~/.config/mr-radar/settings.json`.
+
 ## How it works
 
 The plugin calls the GitLab API through `glab`.

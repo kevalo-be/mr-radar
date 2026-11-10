@@ -81,16 +81,28 @@ def people(path):
     return [n for n in names if n]
 
 
+def load_settings(path):
+    try:
+        settings = json.loads(path.read_text())
+        return settings if isinstance(settings, dict) else {}
+    except (FileNotFoundError, ValueError):  # missing or hand-edited badly
+        return {}
+
+
+def save_setting(path, key, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({**load_settings(path), key: value}))
+
+
 def load_red_after(path):
     try:
-        return timedelta(minutes=json.loads(path.read_text())["red_after_minutes"])
-    except (FileNotFoundError, ValueError, KeyError, TypeError):  # missing or hand-edited badly
+        return timedelta(minutes=load_settings(path)["red_after_minutes"])
+    except (KeyError, TypeError):
         return RED_AFTER
 
 
 def save_red_after(path, minutes):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"red_after_minutes": int(minutes)}))
+    save_setting(path, "red_after_minutes", int(minutes))
 
 
 def is_older(gitlab_time, age, now=None):
@@ -109,9 +121,11 @@ def tip(text):
     return 'tooltip="' + text.replace('"', "'") + '"'  # a " would end SwiftBar's quoted value
 
 
-def render(me, rows, red_after=RED_AFTER, own=()):
+def render(me, rows, red_after=RED_AFTER, own=(), hide_approved=False):
     """rows: list of (icon, mr), own: list of (icon, open threads, mr). Returns SwiftBar output."""
     rows = sorted(rows, key=lambda r: (ORDER[r[0]], r[1]["updated_at"]))
+    if hide_approved:
+        rows = [r for r in rows if r[0] != "🟢"]
     own = sorted(own, key=lambda r: (ORDER[r[0]], r[2]["updated_at"]))
     count = {c: sum(1 for icon, _ in rows if icon == c) for c in ORDER}
     count["💬"] = sum(len(threads) for _, threads, _ in own)
@@ -130,7 +144,9 @@ def render(me, rows, red_after=RED_AFTER, own=()):
                      + tip(f"{mr['references']['full']} · {n} open thread{'' if n == 1 else 's'}"))
     lines += ["---", f"Open GitLab dashboard | href={DASHBOARD.format(me)}",
               f"Open my merge requests | href={MY_DASHBOARD.format(me)}",
-              f"Edit people… | bash=/usr/bin/open param1=-t param2={PEOPLE} terminal=false"]
+              f"Edit people… | bash=/usr/bin/open param1=-t param2={PEOPLE} terminal=false",
+              f"Hide approved | bash={pathlib.Path(__file__).resolve()} param1=--hide-approved "
+              f"param2={'off' if hide_approved else 'on'} terminal=false refresh=true checked={str(hide_approved).lower()}"]
     minutes = red_after // timedelta(minutes=1)
     label = next((l for l, m in RED_AFTER_CHOICES.items() if m == minutes), f"{minutes}m")
     lines.append(f"Red after: {label}")
@@ -185,7 +201,7 @@ def main():
         print(f"⚠️ MR\n---\n{str(e).splitlines()[0][:80]}\nRefresh | refresh=true")
         return
 
-    print(render(me, rows, red_after, own_rows))
+    print(render(me, rows, red_after, own_rows, load_settings(SETTINGS).get("hide_approved") is True))
     todo = {f"{mr['id']}{icon}": (icon, mr) for icon, mr in rows if icon in ("🔴", "🟠")}
     for key in todo.keys() - set(state["seen"]):
         icon, mr = todo[key]
@@ -250,11 +266,21 @@ def selftest():
         assert load_red_after(settings) == RED_AFTER, "no settings file means the 1-hour default"
         save_red_after(settings, "30")
         assert load_red_after(settings) == timedelta(minutes=30)
+        save_setting(settings, "hide_approved", True)
+        assert load_settings(settings) == {"red_after_minutes": 30, "hide_approved": True}, \
+            "saving one setting keeps the others: " + settings.read_text()
         settings.write_text("{oops")
         assert load_red_after(settings) == RED_AFTER, "a broken settings file falls back to the default"
+        assert load_settings(settings) == {}
     menu = render("me", [], timedelta(minutes=30)).splitlines()
     assert "Red after: 30m" in menu, menu
     assert [l for l in menu if "checked=true" in l] == [next(l for l in menu if l.startswith("--30m"))]
+    assert any(l.startswith("Hide approved |") and "param2=on" in l for l in menu), "the toggle turns hiding on"
+    mixed = [("🟢", mr(1, "done", "1")), ("🟠", mr(3, "pushed", "3"))]
+    hidden = render("me", mixed, hide_approved=True).splitlines()
+    assert [l[0] for l in hidden[2:3]] == ["🟠"] and hidden[3] == "---", "only 🟢 is hidden: " + str(hidden[:4])
+    assert any(l.startswith("Hide approved |") and "param2=off" in l and "checked=true" in l for l in hidden)
+    assert render("me", mixed[:1], hide_approved=True).splitlines()[2] == "Nothing to review"
     print("selftest ok")
 
 
@@ -263,5 +289,7 @@ if __name__ == "__main__":
         selftest()
     elif "--red-after" in sys.argv:  # clicked in the "Red after" submenu
         save_red_after(SETTINGS, sys.argv[sys.argv.index("--red-after") + 1])
+    elif "--hide-approved" in sys.argv:  # clicked "Hide approved"
+        save_setting(SETTINGS, "hide_approved", sys.argv[sys.argv.index("--hide-approved") + 1] == "on")
     else:
         main()
