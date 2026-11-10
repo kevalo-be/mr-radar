@@ -3,7 +3,7 @@
 # <xbar.version>v1.0</xbar.version>
 # <xbar.author>Kevin Van Loo</xbar.author>
 # <xbar.author.github>kevalo-be</xbar.author.github>
-# <xbar.desc>Lists the open GitLab merge requests you review or follow, with notifications.</xbar.desc>
+# <xbar.desc>Lists the open GitLab merge requests you review, follow or author, with notifications.</xbar.desc>
 # <xbar.dependencies>python3,glab</xbar.dependencies>
 # <xbar.abouturl>https://github.com/kevalo-be/mr-radar</xbar.abouturl>
 # <swiftbar.hideRunInTerminal>true</swiftbar.hideRunInTerminal>
@@ -28,6 +28,7 @@ PEOPLE_TEMPLATE = """\
 # jdoe
 """
 DASHBOARD = "https://gitlab.com/dashboard/merge_requests?reviewer_username={}"
+MY_DASHBOARD = "https://gitlab.com/dashboard/merge_requests?author_username={}"
 SETTINGS = pathlib.Path.home() / ".config/mr-radar/settings.json"
 ORDER = {"🔴": 0, "🟠": 1, "⚪": 2, "🟢": 3}
 RED_AFTER = timedelta(hours=1)
@@ -59,6 +60,19 @@ def colour(mr, me, red_after):
     return "🟠" if last_push > approved_at else "🟢"
 
 
+def open_threads(discussions):
+    return [d for d in discussions if d["notes"][0]["resolvable"] and not d["notes"][0]["resolved"]]
+
+
+def mine(mr):
+    base = f"projects/{mr['project_id']}/merge_requests/{mr['iid']}"
+    # shortcut: counts the first 100 threads only, paginate if an MR ever has more
+    threads = open_threads(api(f"{base}/discussions?per_page=100"))
+    if threads:
+        return "🔴", threads
+    return ("🟢" if api(f"{base}/approvals")["approved"] else "🟠"), threads
+
+
 def people(path):
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -85,20 +99,33 @@ def is_older(gitlab_time, age, now=None):
     return (now or datetime.now(timezone.utc)) - created > age
 
 
-def render(me, rows, red_after=RED_AFTER):
-    """rows: list of (icon, mr). Returns SwiftBar output."""
+def short(title):
+    title = title.replace("|", "¦")
+    # truncate here: SwiftBar's length= adds a hover tooltip with the full title
+    return title[:70] + "…" if len(title) > 70 else title
+
+
+def render(me, rows, red_after=RED_AFTER, own=()):
+    """rows: list of (icon, mr), own: list of (icon, open threads, mr). Returns SwiftBar output."""
     rows = sorted(rows, key=lambda r: (ORDER[r[0]], r[1]["updated_at"]))
+    own = sorted(own, key=lambda r: (ORDER[r[0]], r[2]["updated_at"]))
     count = {c: sum(1 for icon, _ in rows if icon == c) for c in ORDER}
-    lines = [" ".join(f"{c} {count[c]}" for c in ("🔴", "🟠") if count[c]) or "🟢", "---"]
+    count["💬"] = sum(len(threads) for _, threads, _ in own)
+    lines = [" ".join(f"{c} {count[c]}" for c in ("🔴", "🟠", "💬") if count[c]) or "🟢", "---"]
     for icon, mr in rows:
-        title = mr["title"].replace("|", "¦")
-        if len(title) > 70:  # truncate here: SwiftBar's length= adds a hover tooltip with the full title
-            title = title[:70] + "…"
-        lines.append(f"{icon} {title} | href={mr['web_url']}")
+        lines.append(f"{icon} {short(mr['title'])} | href={mr['web_url']}")
         lines.append(f"--{mr['references']['full']} · {mr['author']['name']} | href={mr['web_url']}")
     if not rows:
         lines.append("Nothing to review")
+    if own:
+        lines += ["---", "My merge requests"]
+    for icon, threads, mr in own:
+        n = len(threads)
+        suffix = f" 💬 {n}" if n else ""
+        lines.append(f"{icon} {short(mr['title'])}{suffix} | href={mr['web_url']}")
+        lines.append(f"--{mr['references']['full']} · {n} open thread{'' if n == 1 else 's'} | href={mr['web_url']}")
     lines += ["---", f"Open GitLab dashboard | href={DASHBOARD.format(me)}",
+              f"Open my merge requests | href={MY_DASHBOARD.format(me)}",
               f"Edit people… | bash=/usr/bin/open param1=-t param2={PEOPLE} terminal=false"]
     minutes = red_after // timedelta(minutes=1)
     label = next((l for l, m in RED_AFTER_CHOICES.items() if m == minutes), f"{minutes}m")
@@ -108,6 +135,18 @@ def render(me, rows, red_after=RED_AFTER):
                      f"terminal=false refresh=true checked={str(m == minutes).lower()}")
     lines.append("Refresh | refresh=true")
     return "\n".join(lines)
+
+
+def thread_news(own, me, known):
+    """known: thread ids from the last run, None on the first run. Returns (notifications, thread ids)."""
+    ids, texts = [], []
+    for _, threads, mr in own:
+        others = [d["id"] for d in threads if d["notes"][0]["author"]["username"] != me]
+        ids += others
+        n = 0 if known is None else len(set(others) - set(known))
+        if n:
+            texts.append(f"{'New comment' if n == 1 else f'{n} new comments'}: {mr['title']}")
+    return texts, ids
 
 
 def notify(text):
@@ -121,12 +160,15 @@ def main():
         me = api("user")["username"]
         filters = [f"reviewer_username={me}"] + [f"author_username={quote(p)}" for p in people(PEOPLE) if p != me]
         with ThreadPoolExecutor(4) as pool:
-            found = [m for page in pool.map(
-                lambda f: api(f"merge_requests?scope=all&state=opened&{f}&per_page=100"), filters) for m in page]
+            pages = list(pool.map(lambda f: api(f"merge_requests?scope=all&state=opened&{f}&per_page=100"),
+                                  filters + [f"author_username={me}"]))
             # an MR by a followed person can also have you as reviewer: keep it once
-            mrs = [m for m in {m["id"]: m for m in found}.values() if not m["draft"]]
+            found = {m["id"]: m for page in pages[:-1] for m in page if m["author"]["username"] != me}
+            mrs = [m for m in found.values() if not m["draft"]]
+            own = [m for m in pages[-1] if not m["draft"]]
             red_after = load_red_after(SETTINGS)
             rows = list(zip(pool.map(lambda m: colour(m, me, red_after), mrs), mrs))
+            own_rows = [(icon, threads, m) for (icon, threads), m in zip(pool.map(mine, own), own)]
     except NotLoggedIn:
         print(f"🔒 MR\n---\nNot logged in to GitLab\nLog in… | bash={GLAB} param1=auth param2=login "
               "terminal=true refresh=true")
@@ -138,12 +180,15 @@ def main():
         print(f"⚠️ MR\n---\n{str(e).splitlines()[0][:80]}\nRefresh | refresh=true")
         return
 
-    print(render(me, rows, red_after))
+    print(render(me, rows, red_after, own_rows))
     todo = {f"{mr['id']}{icon}": (icon, mr["title"]) for icon, mr in rows if icon in ("🔴", "🟠")}
     for key in todo.keys() - set(state["seen"]):
         icon, title = todo[key]
         notify(f"{'Review' if icon == '🔴' else 'New commits'}: {title}")
-    STATE.write_text(json.dumps({"seen": list(todo), "logged_in": True}))
+    texts, thread_ids = thread_news(own_rows, me, state.get("threads"))
+    for text in texts:
+        notify(text)
+    STATE.write_text(json.dumps({"seen": list(todo), "threads": thread_ids, "logged_in": True}))
 
 
 def selftest():
@@ -161,6 +206,31 @@ def selftest():
     long = render("me", [("🔴", mr(5, "x" * 80, "5"))]).splitlines()[2]
     assert long == f"🔴 {'x' * 70}… | href=u", "a long title is cut without a hover tooltip: " + long
     assert render("me", []).splitlines()[0] == "🟢"
+    note = lambda resolvable, resolved: {"notes": [{"resolvable": resolvable, "resolved": resolved}]}
+    threads = [note(True, False), note(True, True), note(False, False)]
+    assert open_threads(threads) == threads[:1], "only resolvable, unresolved threads are open"
+    own = [("🟢", [], mr(6, "approved", "6")), ("🔴", threads[:1] * 2, mr(7, "x" * 80, "7"))]
+    menu = render("me", [("🔴", mr(2, "a", "2")), ("🟠", mr(3, "b", "3"))], RED_AFTER, own).splitlines()
+    assert menu[0] == "🔴 1 🟠 1 💬 2", menu[0]
+    section = menu[menu.index("My merge requests") + 1:]
+    assert section[0] == f"🔴 {'x' * 70}… 💬 2 | href=u", "the thread count follows the cut title: " + section[0]
+    assert section[1] == "--g/p!1 · 2 open threads | href=u", section[1]
+    assert section[2] == "🟢 approved | href=u", "no 💬 suffix without open threads: " + section[2]
+    assert section[3] == "--g/p!1 · 0 open threads | href=u", section[3]
+    assert render("me", [], RED_AFTER, own).splitlines()[0] == "💬 2"
+    assert "· 1 open thread |" in render("me", [], RED_AFTER, [("🔴", threads[:1], mr(8, "c", "8"))])
+    assert render("me", [], RED_AFTER, own[:1]).splitlines()[0] == "🟢"
+    assert "My merge requests" not in render("me", []), "no section without MRs of your own"
+    by = lambda i, who: {"id": i, "notes": [{"author": {"username": who}}]}
+    news = [("🔴", [by("t1", "bob"), by("t2", "me")], mr(9, "mine", "9")),
+            ("🔴", [by("t3", "bob"), by("t4", "ann")], mr(10, "other", "10"))]
+    assert thread_news(news, "me", None) == ([], ["t1", "t3", "t4"]), "the first run only remembers the threads"
+    assert thread_news(news, "me", ["t1"]) == (["2 new comments: other"], ["t1", "t3", "t4"])
+    assert thread_news(news, "me", ["t3", "t4"]) == (["New comment: mine"], ["t1", "t3", "t4"]), \
+        "your own thread t2 never notifies"
+    assert thread_news(news, "me", ["t1", "t3", "t4"])[0] == []
+    assert len(thread_news(news, "me", [])[0]) == 2, "an empty list is a run without threads, not a first run"
+    assert "Open my merge requests | href=https://gitlab.com/dashboard/merge_requests?author_username=me" in menu
     with tempfile.TemporaryDirectory() as tmp:
         path = pathlib.Path(tmp) / "sub/people"
         assert people(path) == [], "a new people file holds only comments"
