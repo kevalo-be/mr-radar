@@ -8,12 +8,20 @@ import pathlib
 import shutil
 import subprocess
 import sys
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 
 # SwiftBar runs plugins without Homebrew on the PATH: Apple Silicon, then Intel.
 GLAB = shutil.which("glab", path="/opt/homebrew/bin:/usr/local/bin") or "glab"
 STATE = pathlib.Path.home() / "Library/Caches/mr-radar.json"
+PEOPLE = pathlib.Path.home() / ".config/mr-radar/people"
+PEOPLE_TEMPLATE = """\
+# MR Radar shows the open merge requests of the GitLab users below.
+# Write one username per line. A # starts a comment.
+# jdoe
+"""
 DASHBOARD = "https://gitlab.com/dashboard/merge_requests?reviewer_username={}"
 ORDER = {"🔴": 0, "🟠": 1, "⚪": 2, "🟢": 3}
 RED_AFTER = timedelta(hours=1)
@@ -44,6 +52,14 @@ def colour(mr, me):
     return "🟠" if last_push > approved_at else "🟢"
 
 
+def people(path):
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(PEOPLE_TEMPLATE)
+    names = (line.split("#")[0].strip().lstrip("@") for line in path.read_text().splitlines())
+    return [n for n in names if n]
+
+
 def is_older(gitlab_time, age, now=None):
     # Python 3.9 (macOS /usr/bin/python3) cannot parse the trailing Z
     created = datetime.fromisoformat(gitlab_time.replace("Z", "+00:00"))
@@ -61,7 +77,9 @@ def render(me, rows):
         lines.append(f"--{mr['references']['full']} · {mr['author']['name']} | href={mr['web_url']}")
     if not rows:
         lines.append("Nothing to review")
-    lines += ["---", f"Open GitLab dashboard | href={DASHBOARD.format(me)}", "Refresh | refresh=true"]
+    lines += ["---", f"Open GitLab dashboard | href={DASHBOARD.format(me)}",
+              f"Edit people… | bash=/usr/bin/open param1=-t param2={PEOPLE} terminal=false",
+              "Refresh | refresh=true"]
     return "\n".join(lines)
 
 
@@ -74,9 +92,12 @@ def main():
     state = json.loads(STATE.read_text()) if STATE.exists() else {"seen": [], "logged_in": True}
     try:
         me = api("user")["username"]
-        mrs = [m for m in api(f"merge_requests?scope=all&state=opened&reviewer_username={me}&per_page=100")
-               if not m["draft"]]
+        filters = [f"reviewer_username={me}"] + [f"author_username={quote(p)}" for p in people(PEOPLE) if p != me]
         with ThreadPoolExecutor(4) as pool:
+            found = [m for page in pool.map(
+                lambda f: api(f"merge_requests?scope=all&state=opened&{f}&per_page=100"), filters) for m in page]
+            # an MR by a followed person can also have you as reviewer: keep it once
+            mrs = [m for m in {m["id"]: m for m in found}.values() if not m["draft"]]
             rows = list(zip(pool.map(lambda m: colour(m, me), mrs), mrs))
     except NotLoggedIn:
         print(f"🔒 MR\n---\nNot logged in to GitLab\nLog in… | bash={GLAB} param1=auth param2=login "
@@ -110,6 +131,11 @@ def selftest():
     assert not is_older("2026-11-09T11:30:00.000Z", RED_AFTER, now)
     assert "a¦b |" in lines[2], "a pipe in a title must not break the SwiftBar line"
     assert render("me", []).splitlines()[0] == "🟢"
+    with tempfile.TemporaryDirectory() as tmp:
+        path = pathlib.Path(tmp) / "sub/people"
+        assert people(path) == [], "a new people file holds only comments"
+        path.write_text("alice\n  @bob  # team lead\n\n# carol\n")
+        assert people(path) == ["alice", "bob"], people(path)
     print("selftest ok")
 
 

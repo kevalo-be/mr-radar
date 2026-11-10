@@ -36,12 +36,30 @@ macOS shows notifications from scripts under that app name.
 
 To update, run `git pull` in `~/mr-radar`.
 
+## Follow people
+
+MR Radar can also show the open merge requests of people you choose, such as your team.
+Put their GitLab usernames in `~/.config/mr-radar/people`, one per line.
+A `#` starts a comment.
+
+```
+# my team
+jdoe
+asmith
+```
+
+The plugin creates this file on its first run.
+The menu item "Edit people…" opens it.
+Each user has their own file, so every team keeps its own list.
+
+A merge request of a followed person gets the same icons and notifications as a merge request you review.
+
 ## How it works
 
 The plugin calls the GitLab API through `glab`.
 Therefore it uses your existing `glab` login and needs no token of its own.
 
-- The plugin lists open merge requests where you are a reviewer.
+- The plugin lists open merge requests where you are a reviewer, plus the open merge requests of the people you follow.
 - For each merge request, it reads the approvals.
 - If you approved, it compares your approval time with the time of the last push.
 
