@@ -5,9 +5,9 @@ The plugin runs in [SwiftBar](https://github.com/swiftbar/SwiftBar) and refreshe
 
 | Icon | Meaning |
 |---|---|
-| 🔴 | You have not approved the merge request, and it is older than 1 hour. |
+| 🔴 | You have not approved the merge request, and it is older than the "Red after" time. The default is 1 hour. |
 | 🟠 | You approved the merge request, but new commits were pushed after your approval. |
-| ⚪ | You have not approved the merge request, but it is younger than 1 hour. |
+| ⚪ | You have not approved the merge request, but it is younger than the "Red after" time. |
 | 🟢 | You approved the merge request, and nothing was pushed since. |
 | 🔒 | You are not logged in to GitLab. |
 | ⚠️ | GitLab could not be reached. |
@@ -57,6 +57,12 @@ Each user has their own file, so every team keeps its own list.
 
 A merge request of a followed person gets the same icons and notifications as a merge request you review.
 
+## Red after
+
+The "Red after" submenu sets how old an unapproved merge request must be before it turns 🔴.
+The choices are 15m, 30m, 1h, 2h and 4h. The default is 1h.
+The plugin saves your choice in `~/.config/mr-radar/settings.json`.
+
 ## How it works
 
 The plugin calls the GitLab API through `glab`.
@@ -72,7 +78,7 @@ The plugin keeps the merge requests it already notified about in `~/Library/Cach
 
 - The plugin works with gitlab.com only.
 - Some projects remove approvals when new commits are pushed. In those projects, a merge request with new commits shows 🔴 instead of 🟠.
-- The 1-hour rule counts from the creation of the merge request. A draft that was marked ready after a day turns 🔴 immediately.
+- The "Red after" time counts from the creation of the merge request. A draft that was marked ready after a day turns 🔴 immediately.
 
 ## Test
 
