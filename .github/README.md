@@ -3,6 +3,7 @@
 A macOS menu bar plugin that lists the open GitLab merge requests where you are a reviewer.
 It also lists your own open merge requests, with their open comments.
 The plugin runs in [SwiftBar](https://github.com/swiftbar/SwiftBar) and refreshes every 2 minutes.
+On Windows, MR Radar runs in the system tray. See [Windows](#windows).
 
 | Icon | Meaning |
 |---|---|
@@ -43,6 +44,45 @@ Allow it, because SwiftBar sends the notifications of MR Radar.
 Click a notification to open its merge request.
 
 To update, run `git pull` in `~/swiftbar/mr-radar`.
+
+## Windows
+
+On Windows, MR Radar is a program in the system tray, with the same menu as on macOS.
+
+1. Install `glab` and log in, in PowerShell:
+
+   ```powershell
+   winget install GLab.GLab
+   glab auth login
+   ```
+
+2. Download `mr-radar.exe` from the [latest release](https://github.com/kevalo-be/mr-radar/releases/latest).
+3. Start `mr-radar.exe`. Windows SmartScreen may warn that the program is unknown, because the program is not signed. Click "More info", then "Run anyway".
+
+A coloured circle appears in the system tray. Windows may hide it behind the `^` arrow. Drag it onto the taskbar to keep it visible.
+
+| Circle | Meaning |
+|---|---|
+| Red with a number | The number of 🔴 and 🟠 merge requests, at least one of them 🔴. |
+| Orange with a number | The number of 🟠 merge requests. |
+| Green | Nothing needs your attention. |
+| Grey with `!` | You are not logged in to GitLab. |
+| Yellow with `?` | GitLab could not be reached. |
+
+Hover over the circle to see the counts, for example `🔴 2 🟠 1 💬 3`.
+Right-click the circle to open the menu.
+
+To start MR Radar when you log in, press Windows+R, type `shell:startup`, and put a shortcut to `mr-radar.exe` in the folder that opens.
+
+The people and repos files are in `C:\Users\<you>\.config\mr-radar`. "Edit people…" and "Edit repos…" open them in Notepad.
+
+Windows differs from macOS in these points:
+
+- Menu items have no tooltip with the project and the author.
+- Notifications may show "Python" as the app name, because MR Radar does not register an app name with Windows.
+- To update, download the new `mr-radar.exe` and replace the old one. Quit MR Radar first, with "Quit MR Radar" in its menu.
+
+To run from source instead of the `.exe`, install Python 3.12 and run `pip install pystray pillow win11toast`. Then start `pythonw mr-radar.2m.py --tray`.
 
 ## Follow people
 
@@ -150,3 +190,16 @@ A click on "Hide approved by me" redraws the menu from that file, so the menu up
 ```sh
 ./mr-radar.2m.py --selftest
 ```
+
+## Release the Windows program
+
+GitHub Actions builds `mr-radar.exe` on Windows. The workflow is `.github/workflows/windows-exe.yml`.
+Push a tag that starts with `v` to publish a release with the program:
+
+```sh
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+The workflow runs the self-test, builds the program, runs the self-test again inside the program, and attaches `mr-radar.exe` to the release.
+You can also start the workflow by hand on the Actions tab. That run keeps the program as a download on the run page, without a release.

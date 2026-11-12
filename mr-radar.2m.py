@@ -9,7 +9,9 @@
 # <swiftbar.hideRunInTerminal>true</swiftbar.hideRunInTerminal>
 # <swiftbar.hideDisablePlugin>true</swiftbar.hideDisablePlugin>
 import json
+import os
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -18,10 +20,16 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote, urlencode
 
+WINDOWS = sys.platform == "win32"
 # SwiftBar runs plugins without Homebrew on the PATH: Apple Silicon, then Intel.
-GLAB = shutil.which("glab", path="/opt/homebrew/bin:/usr/local/bin") or "glab"
-STATE = pathlib.Path.home() / "Library/Caches/mr-radar.json"
-LAST_FETCH = pathlib.Path.home() / "Library/Caches/mr-radar-last-fetch.json"  # redraws a toggle click without GitLab
+GLAB = (shutil.which("glab") if WINDOWS else shutil.which("glab", path="/opt/homebrew/bin:/usr/local/bin")) or "glab"
+CACHE = (pathlib.Path(os.environ.get("LOCALAPPDATA") or pathlib.Path.home() / "AppData/Local") / "mr-radar"
+         if WINDOWS else pathlib.Path.home() / "Library/Caches")
+STATE = CACHE / "mr-radar.json"
+LAST_FETCH = CACHE / "mr-radar-last-fetch.json"  # redraws a toggle click without GitLab
+SELF = pathlib.Path(__file__).resolve()
+# without CREATE_NO_WINDOW, every glab call from the Windows tray flashes a console window
+NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if WINDOWS else {}
 PEOPLE = pathlib.Path.home() / ".config/mr-radar/people"
 PEOPLE_TEMPLATE = """\
 # MR Radar shows the open merge requests of the GitLab users below.
@@ -67,7 +75,11 @@ class NotLoggedIn(Exception):
 
 
 def api(path, attempts=3):
-    r = subprocess.run([GLAB, "api", path], capture_output=True, text=True)
+    # utf-8: Windows would decode titles and names with its ANSI code page
+    try:
+        r = subprocess.run([GLAB, "api", path], capture_output=True, encoding="utf-8", errors="replace", **NO_WINDOW)
+    except FileNotFoundError:
+        raise RuntimeError("glab is not installed") from None
     if r.returncode:
         if "401" in r.stderr + r.stdout:  # also what glab returns without a token
             raise NotLoggedIn
@@ -103,8 +115,9 @@ def mine(mr):
 def listed(path, template):
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(template)
-    names = (line.split("#")[0].strip().lstrip("@") for line in path.read_text().splitlines())
+        path.write_text(template, encoding="utf-8")
+    # utf-8: Notepad saves utf-8, Windows would read the file with its ANSI code page
+    names = (line.split("#")[0].strip().lstrip("@") for line in path.read_text(encoding="utf-8").splitlines())
     return [n for n in names if n]
 
 
@@ -159,6 +172,24 @@ def tip(text):
     return 'tooltip="' + text.replace('"', "'") + '"'  # a " would end SwiftBar's quoted value
 
 
+def arg(value):
+    # shortcut: a value with a " or ' breaks the line, quote-escape it if such a path ever shows up
+    value = str(value)
+    return f'"{value}"' if " " in value else value  # SwiftBar splits an unquoted value at a space
+
+
+def run_self(*params):
+    """SwiftBar parameters that run this file with params: the tray calls act() with them instead."""
+    return f"bash={arg(SELF)} " + " ".join(f"param{i}={arg(p)}" for i, p in enumerate(params, 1))
+
+
+def open_file(path):
+    if WINDOWS:
+        subprocess.Popen(["notepad.exe", str(path)])  # startfile would ask which app opens a file without extension
+    else:
+        subprocess.run(["/usr/bin/open", "-t", str(path)])
+
+
 def mr_line(icon, mr):
     return (f"{icon} {short(mr['title'])} | href={mr['web_url']} "
             + tip(f"{mr['references']['full']} · {mr['author']['name']}"))
@@ -169,8 +200,7 @@ def render(me, rows, red_after=RED_AFTER, own=(), hide_approved=False, repos=(),
     missing: repository paths GitLab does not know. Returns SwiftBar output."""
     rows = sorted(rows, key=lambda r: (ORDER[r[0]], r[1]["updated_at"]))
     approved = sum(1 for icon, _ in [*rows, *repos] if icon == "🟢")
-    toggle = (f"bash={pathlib.Path(__file__).resolve()} param1=--hide-approved "
-              f"param2={'off' if hide_approved else 'on'} terminal=false refresh=true")
+    toggle = run_self("--hide-approved", "off" if hide_approved else "on") + " terminal=false refresh=true"
     if hide_approved:
         rows = [r for r in rows if r[0] != "🟢"]
         repos = [r for r in repos if r[0] != "🟢"]
@@ -196,18 +226,17 @@ def render(me, rows, red_after=RED_AFTER, own=(), hide_approved=False, repos=(),
     for path, group in groups.items():
         lines.append(f"📁 {path} | href=https://gitlab.com/{path}/-/merge_requests")
         lines += [mr_line(icon, mr) for icon, mr in sorted(group, key=lambda r: (ORDER[r[0]], r[1]["updated_at"]))]
-    lines += [f"⚠️ {r}: not found | bash=/usr/bin/open param1=-t param2={REPOS} terminal=false" for r in missing]
+    lines += [f"⚠️ {r}: not found | {run_self('--open', REPOS)} terminal=false" for r in missing]
     lines += ["---", f"Open GitLab dashboard | href={DASHBOARD.format(me)}",
               f"Open my merge requests | href={MY_DASHBOARD.format(me)}",
-              f"Edit people… | bash=/usr/bin/open param1=-t param2={PEOPLE} terminal=false",
-              f"Edit repos… | bash=/usr/bin/open param1=-t param2={REPOS} terminal=false",
+              f"Edit people… | {run_self('--open', PEOPLE)} terminal=false",
+              f"Edit repos… | {run_self('--open', REPOS)} terminal=false",
               (f"Show approved by me ({approved} hidden)" if hide_approved else f"Hide approved by me ({approved})") + f" | {toggle}"]
     minutes = red_after // timedelta(minutes=1)
     label = next((l for l, m in RED_AFTER_CHOICES.items() if m == minutes), f"{minutes}m")
     lines.append(f"Red after: {label}")
     for l, m in RED_AFTER_CHOICES.items():
-        lines.append(f"--{l} | bash={pathlib.Path(__file__).resolve()} param1=--red-after param2={m} "
-                     f"terminal=false refresh=true checked={str(m == minutes).lower()}")
+        lines.append(f"--{l} | {run_self('--red-after', m)} terminal=false refresh=true checked={str(m == minutes).lower()}")
     lines += ["Help"] + ["--" + l for l in HELP]
     lines.append("Refresh | refresh=true")
     return "\n".join(lines)
@@ -226,6 +255,13 @@ def thread_news(own, me, known):
 
 
 def notify(text, href=None):
+    if WINDOWS:
+        from win11toast import notify as toast
+        try:  # a string on_click opens the URL through Windows, also after MR Radar restarts
+            toast(title="MR Radar", body=text, **({"on_click": href} if href else {}))
+        except Exception:  # shortcut: a failing toast is dropped silently, log it if toasts go missing
+            pass
+        return
     # SwiftBar sends the alert, so a click opens href; an osascript alert would open Script Editor
     params = {"plugin": "mr-radar", "title": "MR Radar", "body": text, **({"href": href} if href else {})}
     subprocess.run(["/usr/bin/open", "-g", "swiftbar://notify?" + urlencode(params, quote_via=quote)])
@@ -254,10 +290,12 @@ def rerender(path, hide_approved):
 
 def main():
     hide_approved = load_settings(SETTINGS).get("hide_approved") is True
-    menu = rerender(LAST_FETCH, hide_approved)
-    if menu:
-        print(menu)
-        return
+    print(rerender(LAST_FETCH, hide_approved) or fetch(hide_approved))
+
+
+def fetch(hide_approved):
+    """Calls GitLab, sends the notifications, saves the state, and returns the menu text."""
+    CACHE.mkdir(parents=True, exist_ok=True)  # %LOCALAPPDATA%\mr-radar does not exist on a new Windows install
     state = json.loads(STATE.read_text()) if STATE.exists() else {"seen": [], "logged_in": True}
     try:
         me = api("user")["username"]
@@ -281,17 +319,15 @@ def main():
             repo_rows = list(zip(pool.map(lambda m: colour(m, me, red_after), in_repos.values()), in_repos.values()))
             own_rows = [(icon, threads, m) for (icon, threads), m in zip(pool.map(mine, own), own)]
     except NotLoggedIn:
-        print(f"🔒 MR\n---\nNot logged in to GitLab\nLog in… | bash={GLAB} param1=auth param2=login "
-              "terminal=true refresh=true")
         if state["logged_in"]:
             notify("Not logged in to GitLab")
         STATE.write_text(json.dumps({**state, "logged_in": False}))
-        return
+        return (f"🔒 MR\n---\nNot logged in to GitLab\nLog in… | bash={arg(GLAB)} param1=auth param2=login "
+                "terminal=true refresh=true")
     except Exception as e:  # offline, GitLab down: show it, keep the state for the next run
-        print(f"⚠️ MR\n---\n{str(e).splitlines()[0][:80]}\nRefresh | refresh=true")
-        return
+        return f"⚠️ MR\n---\n{str(e).splitlines()[0][:80]}\nRefresh | refresh=true"
 
-    print(render(me, rows, red_after, own_rows, hide_approved, repo_rows, missing))
+    menu = render(me, rows, red_after, own_rows, hide_approved, repo_rows, missing)
     LAST_FETCH.write_text(json.dumps({"me": me, "rows": rows, "own": own_rows, "repos": repo_rows, "missing": missing,
                                       "red_after_minutes": red_after // timedelta(minutes=1)}))
     todo = {f"{mr['id']}{icon}": (icon, mr) for icon, mr in rows if icon in ("🔴", "🟠")}
@@ -302,6 +338,7 @@ def main():
     for text, href in texts:
         notify(text, href)
     STATE.write_text(json.dumps({"seen": list(todo), "threads": thread_ids, "logged_in": True}))
+    return menu
 
 
 def selftest():
@@ -410,16 +447,210 @@ def selftest():
     assert all(any(l.startswith("--" + icon) for l in help_lines) for icon in ["🔴", "🟠", "⚪", "🟢", "💬", "📁", "🔒", "⚠️"]), \
         "help explains every icon"
     assert "-----" in help_lines, "--- separators become ----- inside the submenu"
+    assert arg("/a b/people") == '"/a b/people"', "a path with a space, such as a Windows user folder, stays one value"
+    assert arg("/a/people") == "/a/people"
+    assert run_self("--red-after", 15) == f"bash={arg(SELF)} param1=--red-after param2=15"
+    assert f"Edit people… | bash={arg(SELF)} param1=--open param2={arg(PEOPLE)} terminal=false" in plain
+    assert f"Edit repos… | bash={arg(SELF)} param1=--open param2={arg(REPOS)} terminal=false" in plain
+    assert f"⚠️ gone/proj: not found | bash={arg(SELF)} param1=--open param2={arg(REPOS)} terminal=false" in with_repos
+    opened, real_open = [], globals()["open_file"]
+    globals()["open_file"] = opened.append
+    try:
+        assert act(["mr-radar.2m.py", "--open", "/p"]) is True and opened == ["/p"], opened
+    finally:
+        globals()["open_file"] = real_open
+    assert act(["mr-radar.2m.py"]) is False, "no menu command means a normal run"
+
+    full = render("me", [("🔴", mr(2, "a|b", "2"))], RED_AFTER, own, False, repo, ["gone/proj"])
+    bar, items = parse_menu(full)
+    assert bar == ["🔴 1 💬 2"], bar
+    flat = []
+    walk = lambda nodes: [flat.append(n) or (walk(n["children"]) if n else None) for n in nodes]
+    walk(items)
+    body = full.splitlines()[2:]
+    assert len(flat) == len(body), f"every line after the first --- becomes one item: {len(flat)} vs {len(body)}"
+    assert sum(n is None for n in flat) == sum(1 for l in body if l in ("---", "-----")), "separators survive"
+    first = items[0]
+    assert first["title"] == "🔴 a¦b" and first["params"]["tooltip"] == "g/p!1 · A" and first["params"]["href"] == "u", first
+    red = next(n for n in items if n and n["title"].startswith("Red after"))
+    assert [c["title"] for c in red["children"]] == list(RED_AFTER_CHOICES), red
+    assert [c["params"]["checked"] for c in red["children"]].count("true") == 1
+    help_menu = next(n for n in items if n and n["title"] == "Help")
+    assert len(help_menu["children"]) == len(HELP) and help_menu["children"][5] is None, "--- in Help is a separator"
+    assert all(n is None or not n["title"].startswith("-") for n in flat), "no item keeps a -- prefix"
+    windows = parse_menu('x\n---\nEdit people… | bash="C:\\Users\\A B\\mr-radar.exe" param1=--open '
+                         'param2="C:\\Users\\A B\\.config\\mr-radar\\people" terminal=false')[1][0]["params"]
+    assert windows["bash"] == "C:\\Users\\A B\\mr-radar.exe" and windows["param2"].endswith("A B\\.config\\mr-radar\\people"), \
+        "a Windows path with spaces and backslashes survives: " + str(windows)
+
+    def first_action(title):
+        return action_for(next(n for n in flat if n and n["title"].startswith(title))["params"])
+    assert first_action("🔴 a¦b") == ("url", "u")
+    assert first_action("15m") == ("act", [str(SELF), "--red-after", "15"])
+    assert first_action("Hide approved by me") == ("act", [str(SELF), "--hide-approved", "on"])
+    assert first_action("Edit repos") == ("act", [str(SELF), "--open", str(REPOS)])
+    assert first_action("Refresh") == ("refresh", None)
+    assert first_action("My merge requests") == (None, None), "a section header does nothing"
+    login = parse_menu(f"🔒 MR\n---\nLog in… | bash={arg(GLAB)} param1=auth param2=login terminal=true refresh=true")
+    assert action_for(login[1][0]["params"]) == ("login", None)
+
+    assert icon_spec("🔴 4 🟠 3 💬 2") == ("#d93025", "7")
+    assert icon_spec("🟠 2 💬 3") == ("#f29900", "2")
+    assert icon_spec("💬 3") == ("#1e8e3e", ""), "open threads on your own MRs alone do not colour the icon"
+    assert icon_spec("🟢") == ("#1e8e3e", "")
+    assert icon_spec("🔴 120") == ("#d93025", "99")
+    assert icon_spec("🔒 MR") == ("#80868b", "!") and icon_spec("⚠️ MR")[1] == "?"
+    if WINDOWS:  # the .exe must bundle the tray libraries, which macOS never imports
+        import pystray, PIL, win11toast  # noqa: F401
     print("selftest ok")
+
+
+def act(args):
+    """Runs the menu command in args. Returns False when args hold none."""
+    if "--red-after" in args:  # clicked in the "Red after" submenu
+        save_red_after(SETTINGS, args[args.index("--red-after") + 1])
+    elif "--hide-approved" in args:  # clicked "Hide approved by me"
+        save_setting(SETTINGS, "hide_approved", args[args.index("--hide-approved") + 1] == "on")
+        mark_rerender(LAST_FETCH)  # SwiftBar's refresh=true then redraws from the last fetch
+    elif "--open" in args:  # clicked "Edit people…", "Edit repos…" or a repository that was not found
+        open_file(args[args.index("--open") + 1])
+    else:
+        return False
+    return True
+
+
+PARAM = re.compile(r"""(\w+)=("[^"]*"|'[^']*'|\S+)""")
+
+
+def parse_menu(text):
+    """SwiftBar menu text as (menu bar lines, items) for the Windows tray.
+    An item is a dict with title, params and children. A separator is None."""
+    lines = text.splitlines()
+    split = lines.index("---") if "---" in lines else len(lines)
+    items = []
+    levels = [items]  # levels[d] is the list that takes items at submenu depth d
+    for line in lines[split + 1:]:
+        if len(line) >= 3 and not line.strip("-") and len(line) % 2:  # ---, -----, …: a separator
+            depth = min((len(line) - 3) // 2, len(levels) - 1)
+            levels[depth].append(None)
+            del levels[depth + 1:]
+            continue
+        depth = 0
+        while line.startswith("--", depth * 2):
+            depth += 1
+        depth = min(depth, len(levels) - 1)
+        title, _, rest = line[depth * 2:].partition(" | ")
+        params = {k: v[1:-1] if v[0] in "\"'" else v for k, v in PARAM.findall(rest)}
+        item = {"title": title, "params": params, "children": []}
+        levels[depth].append(item)
+        del levels[depth + 1:]
+        levels.append(item["children"])
+    return lines[:split], items
+
+
+def action_for(params):
+    """What a click on a parsed menu item does in the tray: (kind, value), or (None, None)."""
+    if "href" in params:
+        return "url", params["href"]
+    if params.get("bash") == str(SELF):
+        return "act", [str(SELF)] + [params[f"param{i}"] for i in range(1, 10) if f"param{i}" in params]
+    if params.get("bash") == GLAB and params.get("param1") == "auth":
+        return "login", None
+    if params.get("refresh") == "true":
+        return "refresh", None
+    return None, None
+
+
+def icon_spec(summary):
+    """The tray icon for a menu bar line such as 🔴 4 🟠 3 💬 2: (colour, text in the circle)."""
+    if summary.startswith("⏳"):
+        return "#80868b", ""
+    if summary.startswith("🔒"):
+        return "#80868b", "!"
+    if summary.startswith("⚠️"):
+        return "#f9ab00", "?"
+    counts = {icon: int(n) for icon, n in re.findall(r"(🔴|🟠) (\d+)", summary)}
+    colour = "#d93025" if "🔴" in counts else "#f29900" if "🟠" in counts else "#1e8e3e"
+    total = sum(counts.values())
+    return colour, str(min(total, 99)) if total else ""
+
+
+def tray():
+    """The Windows system tray: the SwiftBar menu, parsed into a pystray menu, refreshed every 2 minutes."""
+    import threading
+    import webbrowser
+
+    import pystray
+    from PIL import Image, ImageDraw, ImageFont
+
+    current = {"text": "⏳ MR\n---\nLoading merge requests…"}
+    wake = threading.Event()
+
+    def image(summary):
+        colour, label = icon_spec(summary)
+        picture = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(picture)
+        draw.ellipse((2, 2, 62, 62), fill=colour)
+        try:
+            font = ImageFont.truetype("arialbd.ttf", 40 if len(label) < 2 else 32)
+        except OSError:
+            font = ImageFont.load_default(size=36)
+        draw.text((32, 33), label, fill="white", font=font, anchor="mm")
+        return picture
+
+    def show(text):
+        current["text"] = text
+        summary = text.splitlines()[0]
+        icon.icon = image(summary)
+        icon.title = summary[:127]  # Windows cuts the tray hover text at 127 characters
+        icon.update_menu()
+
+    def refresh_loop():
+        while True:
+            hide_approved = load_settings(SETTINGS).get("hide_approved") is True
+            try:
+                show(rerender(LAST_FETCH, hide_approved) or fetch(hide_approved))
+            except Exception as e:  # keep the tray alive, and show why the refresh failed
+                show(f"⚠️ MR\n---\n{str(e).splitlines()[0][:80] if str(e) else type(e).__name__}\nRefresh | refresh=true")
+            wake.wait(120)
+            wake.clear()
+
+    def run(kind, value):
+        if kind == "url":
+            webbrowser.open(value)
+        elif kind == "act":
+            act(value)
+            wake.set()  # a toggle redraws from the last fetch, "Red after" fetches again
+        elif kind == "login":
+            subprocess.Popen([GLAB, "auth", "login"], creationflags=subprocess.CREATE_NEW_CONSOLE)
+        elif kind == "refresh":
+            wake.set()
+
+    def to_item(node):
+        if node is None:
+            return pystray.Menu.SEPARATOR
+        if node["children"]:
+            return pystray.MenuItem(node["title"], pystray.Menu(*[to_item(c) for c in node["children"]]))
+        kind, value = action_for(node["params"])
+        if kind is None:
+            return pystray.MenuItem(node["title"], None, enabled=False)
+        checked = (lambda _item: True) if node["params"].get("checked") == "true" else None
+        return pystray.MenuItem(node["title"], lambda _icon, _item: run(kind, value), checked=checked)
+
+    def items():
+        yield from (to_item(node) for node in parse_menu(current["text"])[1])
+        yield pystray.Menu.SEPARATOR
+        yield pystray.MenuItem("Quit MR Radar", lambda icon, _item: icon.stop())
+
+    icon = pystray.Icon("mr-radar", image("⏳"), "MR Radar", pystray.Menu(items))
+    icon.run(setup=lambda icon: (setattr(icon, "visible", True),
+                                 threading.Thread(target=refresh_loop, daemon=True).start()))
 
 
 if __name__ == "__main__":
     if "--selftest" in sys.argv:
         selftest()
-    elif "--red-after" in sys.argv:  # clicked in the "Red after" submenu
-        save_red_after(SETTINGS, sys.argv[sys.argv.index("--red-after") + 1])
-    elif "--hide-approved" in sys.argv:  # clicked "Hide approved by me"
-        save_setting(SETTINGS, "hide_approved", sys.argv[sys.argv.index("--hide-approved") + 1] == "on")
-        mark_rerender(LAST_FETCH)  # SwiftBar's refresh=true then redraws from the last fetch
-    else:
+    elif "--tray" in sys.argv or getattr(sys, "frozen", False):  # the Windows .exe starts the tray
+        tray()
+    elif not act(sys.argv):
         main()

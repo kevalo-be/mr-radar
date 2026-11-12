@@ -1,0 +1,48 @@
+name: Windows exe
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the tray libraries and PyInstaller
+        run: python -m pip install pystray==0.19.5 "pillow>=10.1" win11toast==0.36.3 pyinstaller
+
+      - name: Self-test
+        run: python mr-radar.2m.py --selftest
+
+      - name: Build mr-radar.exe
+        run: python -m PyInstaller --onefile --noconsole --name mr-radar --hidden-import pystray._win32 --collect-submodules winrt mr-radar.2m.py
+
+      # a --noconsole program returns at once from a plain call, so wait for its exit code
+      - name: Self-test inside mr-radar.exe
+        shell: pwsh
+        run: |
+          $p = Start-Process dist\mr-radar.exe -ArgumentList '--selftest' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "the self-test inside mr-radar.exe failed with exit code $($p.ExitCode)" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mr-radar-exe
+          path: dist/mr-radar.exe
+
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" dist/mr-radar.exe --title "${{ github.ref_name }}" --generate-notes
