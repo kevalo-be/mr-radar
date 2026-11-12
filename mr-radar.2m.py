@@ -28,12 +28,38 @@ PEOPLE_TEMPLATE = """\
 # Write one username per line. A # starts a comment.
 # jdoe
 """
+REPOS = pathlib.Path.home() / ".config/mr-radar/repos"
+REPOS_TEMPLATE = """\
+# MR Radar lists the open merge requests of the GitLab repositories below.
+# They are not counted in the menu bar and send no notifications.
+# Write one repository path per line. A # starts a comment.
+# my-group/my-project
+"""
 DASHBOARD = "https://gitlab.com/dashboard/merge_requests?reviewer_username={}"
 MY_DASHBOARD = "https://gitlab.com/dashboard/merge_requests?author_username={}"
 SETTINGS = pathlib.Path.home() / ".config/mr-radar/settings.json"
 ORDER = {"🔴": 0, "🟠": 1, "⚪": 2, "🟢": 3}
 RED_AFTER = timedelta(hours=1)
 RED_AFTER_CHOICES = {"15m": 15, "30m": 30, "1h": 60, "2h": 120, "4h": 240}  # label: minutes
+HELP = [
+    "Reviews, followed people and repositories",
+    "🔴 Not approved by you, older than the Red after time",
+    "🟠 Approved by you, but new commits were pushed since",
+    "⚪ Not approved by you, younger than the Red after time",
+    "🟢 Approved by you, nothing pushed since",
+    "---",
+    "My merge requests",
+    "🔴 Has open comments",
+    "🟠 No open comments, still needs approvals",
+    "🟢 No open comments, and approved",
+    "---",
+    "💬 Number of open comment threads on your merge requests",
+    "📁 A followed repository: click to open its merge requests",
+    "🔒 Not logged in to GitLab",
+    "⚠️ GitLab could not be reached, or a repository was not found",
+    "---",
+    "Open the README | href=https://github.com/kevalo-be/mr-radar#readme",
+]
 
 
 class NotLoggedIn(Exception):
@@ -74,12 +100,23 @@ def mine(mr):
     return ("🟢" if api(f"{base}/approvals")["approved"] else "🟠"), threads
 
 
-def people(path):
+def listed(path, template):
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(PEOPLE_TEMPLATE)
+        path.write_text(template)
     names = (line.split("#")[0].strip().lstrip("@") for line in path.read_text().splitlines())
     return [n for n in names if n]
+
+
+def repo_mrs(repo):
+    """The open MRs of a followed repository, or None when GitLab does not know the path."""
+    try:
+        # shortcut: the first 100 open MRs only, paginate if a followed repository ever has more
+        return api(f"projects/{quote(repo, safe='')}/merge_requests?state=opened&per_page=100")
+    except RuntimeError as e:
+        if "404" in str(e):
+            return None
+        raise
 
 
 def load_settings(path):
@@ -122,21 +159,26 @@ def tip(text):
     return 'tooltip="' + text.replace('"', "'") + '"'  # a " would end SwiftBar's quoted value
 
 
-def render(me, rows, red_after=RED_AFTER, own=(), hide_approved=False):
-    """rows: list of (icon, mr), own: list of (icon, open threads, mr). Returns SwiftBar output."""
+def mr_line(icon, mr):
+    return (f"{icon} {short(mr['title'])} | href={mr['web_url']} "
+            + tip(f"{mr['references']['full']} · {mr['author']['name']}"))
+
+
+def render(me, rows, red_after=RED_AFTER, own=(), hide_approved=False, repos=(), missing=()):
+    """rows, repos: lists of (icon, mr), own: list of (icon, open threads, mr),
+    missing: repository paths GitLab does not know. Returns SwiftBar output."""
     rows = sorted(rows, key=lambda r: (ORDER[r[0]], r[1]["updated_at"]))
-    approved = sum(1 for icon, _ in rows if icon == "🟢")
+    approved = sum(1 for icon, _ in [*rows, *repos] if icon == "🟢")
     toggle = (f"bash={pathlib.Path(__file__).resolve()} param1=--hide-approved "
               f"param2={'off' if hide_approved else 'on'} terminal=false refresh=true")
     if hide_approved:
         rows = [r for r in rows if r[0] != "🟢"]
+        repos = [r for r in repos if r[0] != "🟢"]
     own = sorted(own, key=lambda r: (ORDER[r[0]], r[2]["updated_at"]))
     count = {c: sum(1 for icon, _ in rows if icon == c) for c in ORDER}
     count["💬"] = sum(len(threads) for _, threads, _ in own)
     lines = [" ".join(f"{c} {count[c]}" for c in ("🔴", "🟠", "💬") if count[c]) or "🟢", "---"]
-    for icon, mr in rows:
-        lines.append(f"{icon} {short(mr['title'])} | href={mr['web_url']} "
-                     + tip(f"{mr['references']['full']} · {mr['author']['name']}"))
+    lines += [mr_line(icon, mr) for icon, mr in rows]
     if not rows:
         lines.append("Nothing to review")
     if own:
@@ -146,9 +188,19 @@ def render(me, rows, red_after=RED_AFTER, own=(), hide_approved=False):
         suffix = f" 💬 {n}" if n else ""
         lines.append(f"{icon} {short(mr['title'])}{suffix} | href={mr['web_url']} "
                      + tip(f"{mr['references']['full']} · {n} open thread{'' if n == 1 else 's'}"))
+    if repos or missing:
+        lines += ["---", "Repositories"]
+    groups = {}  # keeps the order of the repos file, which main passes on
+    for icon, mr in repos:
+        groups.setdefault(mr["references"]["full"].split("!")[0], []).append((icon, mr))
+    for path, group in groups.items():
+        lines.append(f"📁 {path} | href=https://gitlab.com/{path}/-/merge_requests")
+        lines += [mr_line(icon, mr) for icon, mr in sorted(group, key=lambda r: (ORDER[r[0]], r[1]["updated_at"]))]
+    lines += [f"⚠️ {r}: not found | bash=/usr/bin/open param1=-t param2={REPOS} terminal=false" for r in missing]
     lines += ["---", f"Open GitLab dashboard | href={DASHBOARD.format(me)}",
               f"Open my merge requests | href={MY_DASHBOARD.format(me)}",
               f"Edit people… | bash=/usr/bin/open param1=-t param2={PEOPLE} terminal=false",
+              f"Edit repos… | bash=/usr/bin/open param1=-t param2={REPOS} terminal=false",
               (f"Show approved by me ({approved} hidden)" if hide_approved else f"Hide approved by me ({approved})") + f" | {toggle}"]
     minutes = red_after // timedelta(minutes=1)
     label = next((l for l, m in RED_AFTER_CHOICES.items() if m == minutes), f"{minutes}m")
@@ -156,6 +208,7 @@ def render(me, rows, red_after=RED_AFTER, own=(), hide_approved=False):
     for l, m in RED_AFTER_CHOICES.items():
         lines.append(f"--{l} | bash={pathlib.Path(__file__).resolve()} param1=--red-after param2={m} "
                      f"terminal=false refresh=true checked={str(m == minutes).lower()}")
+    lines += ["Help"] + ["--" + l for l in HELP]
     lines.append("Refresh | refresh=true")
     return "\n".join(lines)
 
@@ -195,7 +248,8 @@ def rerender(path, hide_approved):
     if not data.get("rerender"):
         return None
     path.write_text(json.dumps({**data, "rerender": False}))
-    return render(data["me"], data["rows"], timedelta(minutes=data["red_after_minutes"]), data["own"], hide_approved)
+    return render(data["me"], data["rows"], timedelta(minutes=data["red_after_minutes"]), data["own"], hide_approved,
+                  data.get("repos", []), data.get("missing", []))
 
 
 def main():
@@ -207,16 +261,24 @@ def main():
     state = json.loads(STATE.read_text()) if STATE.exists() else {"seen": [], "logged_in": True}
     try:
         me = api("user")["username"]
-        filters = [f"reviewer_username={me}"] + [f"author_username={quote(p)}" for p in people(PEOPLE) if p != me]
+        filters = [f"reviewer_username={me}"] + [f"author_username={quote(p)}"
+                                                 for p in listed(PEOPLE, PEOPLE_TEMPLATE) if p != me]
+        repos = listed(REPOS, REPOS_TEMPLATE)
         with ThreadPoolExecutor(4) as pool:
             pages = list(pool.map(lambda f: api(f"merge_requests?scope=all&state=opened&{f}&per_page=100"),
                                   filters + [f"author_username={me}"]))
+            repo_pages = list(pool.map(repo_mrs, repos))
             # an MR by a followed person can also have you as reviewer: keep it once
             found = {m["id"]: m for page in pages[:-1] for m in page if m["author"]["username"] != me}
             mrs = [m for m in found.values() if not m["draft"]]
             own = [m for m in pages[-1] if not m["draft"]]
+            # an MR you review or of a followed person stays in the main list, where it counts and notifies
+            in_repos = {m["id"]: m for page in repo_pages if page for m in page
+                        if m["author"]["username"] != me and m["id"] not in found and not m["draft"]}
+            missing = [r for r, page in zip(repos, repo_pages) if page is None]
             red_after = load_red_after(SETTINGS)
             rows = list(zip(pool.map(lambda m: colour(m, me, red_after), mrs), mrs))
+            repo_rows = list(zip(pool.map(lambda m: colour(m, me, red_after), in_repos.values()), in_repos.values()))
             own_rows = [(icon, threads, m) for (icon, threads), m in zip(pool.map(mine, own), own)]
     except NotLoggedIn:
         print(f"🔒 MR\n---\nNot logged in to GitLab\nLog in… | bash={GLAB} param1=auth param2=login "
@@ -229,8 +291,8 @@ def main():
         print(f"⚠️ MR\n---\n{str(e).splitlines()[0][:80]}\nRefresh | refresh=true")
         return
 
-    print(render(me, rows, red_after, own_rows, hide_approved))
-    LAST_FETCH.write_text(json.dumps({"me": me, "rows": rows, "own": own_rows,
+    print(render(me, rows, red_after, own_rows, hide_approved, repo_rows, missing))
+    LAST_FETCH.write_text(json.dumps({"me": me, "rows": rows, "own": own_rows, "repos": repo_rows, "missing": missing,
                                       "red_after_minutes": red_after // timedelta(minutes=1)}))
     todo = {f"{mr['id']}{icon}": (icon, mr) for icon, mr in rows if icon in ("🔴", "🟠")}
     for key in todo.keys() - set(state["seen"]):
@@ -276,7 +338,7 @@ def selftest():
     assert render("me", [], RED_AFTER, own).splitlines()[0] == "💬 2"
     assert '· 1 open thread"' in render("me", [], RED_AFTER, [("🔴", threads[:1], mr(8, "c", "8"))])
     assert render("me", [], RED_AFTER, own[:1]).splitlines()[0] == "🟢"
-    assert "My merge requests" not in render("me", []), "no section without MRs of your own"
+    assert "My merge requests" not in render("me", []).splitlines(), "no section without MRs of your own"
     by = lambda i, who: {"id": i, "notes": [{"author": {"username": who}}]}
     news = [("🔴", [by("t1", "bob"), by("t2", "me")], mr(9, "mine", "9")),
             ("🔴", [by("t3", "bob"), by("t4", "ann")], mr(10, "other", "10"))]
@@ -289,9 +351,13 @@ def selftest():
     assert "Open my merge requests | href=https://gitlab.com/dashboard/merge_requests?author_username=me" in menu
     with tempfile.TemporaryDirectory() as tmp:
         path = pathlib.Path(tmp) / "sub/people"
-        assert people(path) == [], "a new people file holds only comments"
+        assert listed(path, PEOPLE_TEMPLATE) == [], "a new people file holds only comments"
         path.write_text("alice\n  @bob  # team lead\n\n# carol\n")
-        assert people(path) == ["alice", "bob"], people(path)
+        assert listed(path, PEOPLE_TEMPLATE) == ["alice", "bob"], listed(path, PEOPLE_TEMPLATE)
+        repos = pathlib.Path(tmp) / "sub/repos"
+        assert listed(repos, REPOS_TEMPLATE) == [], "a new repos file holds only comments"
+        repos.write_text("grp/sub/proj  # backend\n")
+        assert listed(repos, REPOS_TEMPLATE) == ["grp/sub/proj"]
         settings = pathlib.Path(tmp) / "sub/settings.json"
         assert load_red_after(settings) == RED_AFTER, "no settings file means the 1-hour default"
         save_red_after(settings, "30")
@@ -323,6 +389,27 @@ def selftest():
         quick = rerender(last, True).splitlines()
         assert "Show approved by me (2 hidden)" in "\n".join(quick), "a click redraws with the new setting: " + str(quick)
         assert rerender(last, True) is None, "only the run right after the click skips GitLab"
+    in_repo = lambda path, i, icon, t: (icon, {**mr(i, t, str(i)), "references": {"full": f"{path}!{i}"}})
+    repo = [in_repo("z/second", 22, "🟢", "second done"), in_repo("a/first", 21, "🟢", "first done"),
+            in_repo("z/second", 23, "🔴", "second red")]
+    with_repos = render("me", [("🟠", mr(3, "b", "3"))], RED_AFTER, (), False, repo, ["gone/proj"]).splitlines()
+    assert with_repos[0] == "🟠 1", "repository MRs do not count in the menu bar: " + with_repos[0]
+    section = [l.split(" |")[0] for l in with_repos[with_repos.index("Repositories") + 1:]][:6]
+    assert section == ["📁 z/second", "🔴 second red", "🟢 second done", "📁 a/first", "🟢 first done",
+                       "⚠️ gone/proj: not found"], "grouped in file order, sorted by colour inside: " + str(section)
+    assert "📁 z/second | href=https://gitlab.com/z/second/-/merge_requests" in with_repos
+    assert 'tooltip="z/second!23 · A"' in with_repos[with_repos.index("📁 z/second | href=https://gitlab.com/z/second/-/merge_requests") + 1]
+    hidden_repos = render("me", [], RED_AFTER, (), True, repo).splitlines()
+    assert not any("done" in l for l in hidden_repos), "hide approved by me also hides repository MRs"
+    assert not any(l.startswith("📁 a/first") for l in hidden_repos), "a repository with only hidden MRs has no header"
+    assert any(l.startswith("Show approved by me (2 hidden)") for l in hidden_repos), hidden_repos
+    assert "Repositories" not in render("me", []).splitlines(), "no section without repositories"
+    plain = render("me", []).splitlines()
+    help_lines = plain[plain.index("Help") + 1:plain.index("Refresh | refresh=true")]
+    assert all(l.startswith("--") for l in help_lines), "help is one submenu: " + str(help_lines)
+    assert all(any(l.startswith("--" + icon) for l in help_lines) for icon in ["🔴", "🟠", "⚪", "🟢", "💬", "📁", "🔒", "⚠️"]), \
+        "help explains every icon"
+    assert "-----" in help_lines, "--- separators become ----- inside the submenu"
     print("selftest ok")
 
 

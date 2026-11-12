@@ -13,6 +13,8 @@ The plugin runs in [SwiftBar](https://github.com/swiftbar/SwiftBar) and refreshe
 | 🔒 | You are not logged in to GitLab. |
 | ⚠️ | GitLab could not be reached. |
 
+The "Help" submenu in the menu lists these icons too.
+
 The menu bar shows the number of 🔴 and 🟠 merge requests you review or follow, for example `🔴 2 🟠 1`.
 It adds `💬 3` when your own merge requests have 3 open comments. See [My merge requests](#my-merge-requests).
 It shows `🟢` when nothing needs your attention.
@@ -60,6 +62,29 @@ Each user has their own file, so every team keeps its own list.
 
 A merge request of a followed person gets the same icons and notifications as a merge request you review.
 
+## Follow repositories
+
+MR Radar can also list the open merge requests of GitLab repositories you choose.
+Put the repository paths in `~/.config/mr-radar/repos`, one per line.
+A path is the part of the repository URL after `gitlab.com/`.
+
+```
+# backend repositories
+my-group/backend
+my-group/sub-group/api
+```
+
+The plugin creates this file on its first run.
+The menu item "Edit repos…" opens it.
+
+The merge requests appear in the section "Repositories", with the same icons as a merge request you review.
+They are grouped per repository under a `📁 <path>` line, in the order of the file. Click that line to open the merge requests of the repository in GitLab.
+They are not counted in the menu bar, and they send no notifications.
+Therefore a busy repository with many bot merge requests does not flood your menu bar.
+A merge request you review, or one of a followed person, stays in the main list and keeps its notifications.
+"Hide approved by me" also hides the 🟢 merge requests in this section.
+A path that GitLab does not know shows `⚠️ <path>: not found`.
+
 ## My merge requests
 
 The section "My merge requests" lists your own open merge requests.
@@ -100,7 +125,7 @@ The plugin saves the choice in `~/.config/mr-radar/settings.json`.
 The plugin calls the GitLab API through `glab`.
 Therefore it uses your existing `glab` login and needs no token of its own.
 
-- The plugin lists open merge requests where you are a reviewer, the open merge requests of the people you follow, and your own open merge requests.
+- The plugin lists open merge requests where you are a reviewer, the open merge requests of the people and repositories you follow, and your own open merge requests.
 - Your own merge requests appear only in "My merge requests", also when you are their reviewer.
 - For each merge request, it reads the approvals.
 - If you approved, it compares your approval time with the time of the last push.
@@ -117,6 +142,7 @@ A click on "Hide approved by me" redraws the menu from that file, so the menu up
 - The "Red after" time counts from the creation of the merge request. A draft that was marked ready after a day turns 🔴 immediately.
 - Projects without approval rules count a merge request as approved right away. Your merge request in such a project turns 🟢 as soon as its threads are resolved. This happens even when nobody reviewed it.
 - Only the first 100 threads of a merge request are counted.
+- Only the first 100 open merge requests of a followed repository are listed.
 - When you mark your own draft as ready, its existing threads notify you as new.
 
 ## Test
