@@ -122,6 +122,7 @@ They are grouped per repository under a `📁 <path>` line, in the order of the 
 They are not counted in the menu bar, and they send no notifications.
 Therefore a busy repository with many bot merge requests does not flood your menu bar.
 A merge request you review, or one of a followed person, also shows under its repository. It counts and notifies only in the main list.
+Uncheck "Also show reviews under repositories" to show such a merge request only in the main list.
 "Hide approved by me" also hides the 🟢 merge requests in this section.
 A path that GitLab does not know shows `⚠️ <path>: not found`.
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # <xbar.title>MR Radar</xbar.title>
-# <xbar.version>v1.0.3</xbar.version>
+# <xbar.version>v1.0.4</xbar.version>
 # <xbar.author>Kevin Van Loo</xbar.author>
 # <xbar.author.github>kevalo-be/mr-radar</xbar.author.github>
 # <xbar.desc>Your open GitLab merge requests</xbar.desc>
@@ -197,10 +197,14 @@ def mr_line(icon, mr):
             + tip(f"{mr['references']['full']} · {mr['author']['name']}"))
 
 
-def render(me, rows, red_after=RED_AFTER, own=(), hide_approved=False, repos=(), missing=()):
+def render(me, rows, red_after=RED_AFTER, own=(), hide_approved=False, repos=(), missing=(), repeat=True):
     """rows, repos: lists of (icon, mr), own: list of (icon, open threads, mr),
-    missing: repository paths GitLab does not know. Returns SwiftBar output."""
+    missing: repository paths GitLab does not know, repeat: show MRs of rows under their repository too.
+    Returns SwiftBar output."""
     rows = sorted(rows, key=lambda r: (ORDER[r[0]], r[1]["updated_at"]))
+    if not repeat:
+        in_rows = {mr["id"] for _, mr in rows}
+        repos = [r for r in repos if r[1]["id"] not in in_rows]
     approved = len({mr["id"] for icon, mr in [*rows, *repos] if icon == "🟢"})  # an MR can be in both lists
     toggle = run_self("--hide-approved", "off" if hide_approved else "on") + " terminal=false refresh=true"
     if hide_approved:
@@ -233,7 +237,9 @@ def render(me, rows, red_after=RED_AFTER, own=(), hide_approved=False, repos=(),
               f"Open my merge requests | href={MY_DASHBOARD.format(me)}",
               f"Edit people… | {run_self('--open', PEOPLE)} terminal=false",
               f"Edit repos… | {run_self('--open', REPOS)} terminal=false",
-              (f"Show approved by me ({approved} hidden)" if hide_approved else f"Hide approved by me ({approved})") + f" | {toggle}"]
+              (f"Show approved by me ({approved} hidden)" if hide_approved else f"Hide approved by me ({approved})") + f" | {toggle}",
+              f"Also show reviews under repositories | {run_self('--repeat-in-repos', 'off' if repeat else 'on')} "
+              f"terminal=false refresh=true checked={str(repeat).lower()}"]
     minutes = red_after // timedelta(minutes=1)
     label = next((l for l, m in RED_AFTER_CHOICES.items() if m == minutes), f"{minutes}m")
     lines.append(f"Red after: {label}")
@@ -278,7 +284,7 @@ def mark_rerender(path):
     path.write_text(json.dumps({**data, "rerender": True}))
 
 
-def rerender(path, hide_approved):
+def rerender(path, hide_approved, repeat):
     """The menu from the last fetch when a toggle click asked for it, else None: fetch from GitLab."""
     try:
         data = json.loads(path.read_text())
@@ -288,15 +294,20 @@ def rerender(path, hide_approved):
         return None
     path.write_text(json.dumps({**data, "rerender": False}))
     return render(data["me"], data["rows"], timedelta(minutes=data["red_after_minutes"]), data["own"], hide_approved,
-                  data.get("repos", []), data.get("missing", []))
+                  data.get("repos", []), data.get("missing", []), repeat)
+
+
+def toggles():
+    """(hide approved by me, also show reviews under repositories) from the settings file."""
+    settings = load_settings(SETTINGS)
+    return settings.get("hide_approved") is True, settings.get("repeat_in_repos") is not False
 
 
 def main():
-    hide_approved = load_settings(SETTINGS).get("hide_approved") is True
-    print(rerender(LAST_FETCH, hide_approved) or fetch(hide_approved))
+    print(rerender(LAST_FETCH, *toggles()) or fetch(*toggles()))
 
 
-def fetch(hide_approved):
+def fetch(hide_approved, repeat):
     """Calls GitLab, sends the notifications, saves the state, and returns the menu text."""
     CACHE.mkdir(parents=True, exist_ok=True)  # %LOCALAPPDATA%\mr-radar does not exist on a new Windows install
     state = json.loads(STATE.read_text()) if STATE.exists() else {"seen": [], "logged_in": True}
@@ -331,7 +342,7 @@ def fetch(hide_approved):
         reason = (str(e).splitlines() or [type(e).__name__])[0][:80].replace("|", "¦")  # a | would start fake params
         return f"⚠️ MR\n---\n{reason}\nRefresh | refresh=true"
 
-    menu = render(me, rows, red_after, own_rows, hide_approved, repo_rows, missing)
+    menu = render(me, rows, red_after, own_rows, hide_approved, repo_rows, missing, repeat)
     LAST_FETCH.write_text(json.dumps({"me": me, "rows": rows, "own": own_rows, "repos": repo_rows, "missing": missing,
                                       "red_after_minutes": red_after // timedelta(minutes=1)}))
     todo = {f"{mr['id']}{icon}": (icon, mr) for icon, mr in rows if icon in ("🔴", "🟠")}
@@ -411,7 +422,7 @@ def selftest():
         assert load_settings(settings) == {}
     menu = render("me", [], timedelta(minutes=30)).splitlines()
     assert "Red after: 30m" in menu, menu
-    assert [l for l in menu if "checked=true" in l] == [next(l for l in menu if l.startswith("--30m"))]
+    assert [l for l in menu if l.startswith("--") and "checked=true" in l] == [next(l for l in menu if l.startswith("--30m"))]
     mixed = [("🟢", mr(1, "done", "1")), ("🟢", mr(2, "done too", "2")), ("🟠", mr(3, "pushed", "3"))]
     shown = render("me", mixed).splitlines()
     assert any(l.startswith("Hide approved by me (2) |") and "param2=on" in l for l in shown), "the label counts what it hides"
@@ -423,13 +434,13 @@ def selftest():
     with tempfile.TemporaryDirectory() as tmp:
         last = pathlib.Path(tmp) / "last-fetch.json"
         mark_rerender(last)
-        assert not last.exists() and rerender(last, True) is None, "without a fetch, a click leaves the fetch to SwiftBar"
+        assert not last.exists() and rerender(last, True, True) is None, "without a fetch, a click leaves the fetch to SwiftBar"
         last.write_text(json.dumps({"me": "me", "rows": mixed, "own": [], "red_after_minutes": 60}))
-        assert rerender(last, True) is None, "a scheduled run fetches from GitLab"
+        assert rerender(last, True, True) is None, "a scheduled run fetches from GitLab"
         mark_rerender(last)
-        quick = rerender(last, True).splitlines()
+        quick = rerender(last, True, True).splitlines()
         assert "Show approved by me (2 hidden)" in "\n".join(quick), "a click redraws with the new setting: " + str(quick)
-        assert rerender(last, True) is None, "only the run right after the click skips GitLab"
+        assert rerender(last, True, True) is None, "only the run right after the click skips GitLab"
     in_repo = lambda path, i, icon, t: (icon, {**mr(i, t, str(i)), "references": {"full": f"{path}!{i}"}})
     repo = [in_repo("z/second", 22, "🟢", "second done"), in_repo("a/first", 21, "🟢", "first done"),
             in_repo("z/second", 23, "🔴", "second red")]
@@ -446,6 +457,13 @@ def selftest():
     assert any(l.startswith("Show approved by me (2 hidden)") for l in hidden_repos), hidden_repos
     both = render("me", [repo[0]], RED_AFTER, (), True, repo).splitlines()
     assert any(l.startswith("Show approved by me (2 hidden)") for l in both), "an MR in both lists counts once"
+    twice = render("me", [repo[2]], RED_AFTER, (), False, repo).splitlines()
+    assert sum("second red" in l for l in twice) == 2, "an MR of the main list shows under its repository too"
+    assert any(l.startswith("Also show reviews under repositories") and l.endswith("checked=true") for l in twice)
+    once = render("me", [repo[2]], RED_AFTER, (), False, repo, repeat=False).splitlines()
+    assert sum("second red" in l for l in once) == 1, "repeat off: an MR of the main list shows only there"
+    assert any(l.startswith("📁 z/second") for l in once), "the other MRs of the repository stay"
+    assert any(l.endswith("param2=on terminal=false refresh=true checked=false") for l in once)
     assert "Repositories" not in render("me", []).splitlines(), "no section without repositories"
     plain = render("me", []).splitlines()
     help_lines = plain[plain.index("Help") + 1:plain.index("Refresh | refresh=true")]
@@ -506,6 +524,7 @@ def selftest():
         globals()["SELF"] = real_self
     assert first_action("Hide approved by me") == ("act", [str(SELF), "--hide-approved", "on"])
     assert first_action("Edit repos") == ("act", [str(SELF), "--open", str(REPOS)])
+    assert first_action("Also show reviews") == ("act", [str(SELF), "--repeat-in-repos", "off"])
     assert first_action("Refresh") == ("refresh", None)
     assert first_action("My merge requests") == (None, None), "a section header does nothing"
     login = parse_menu(f"🔒 MR\n---\nLog in… | bash={arg(GLAB)} param1=auth param2=login terminal=true refresh=true")
@@ -529,6 +548,9 @@ def act(args):
     elif "--hide-approved" in args:  # clicked "Hide approved by me"
         save_setting(SETTINGS, "hide_approved", args[args.index("--hide-approved") + 1] == "on")
         mark_rerender(LAST_FETCH)  # SwiftBar's refresh=true then redraws from the last fetch
+    elif "--repeat-in-repos" in args:  # clicked "Also show reviews under repositories"
+        save_setting(SETTINGS, "repeat_in_repos", args[args.index("--repeat-in-repos") + 1] == "on")
+        mark_rerender(LAST_FETCH)
     elif "--open" in args:  # clicked "Edit people…", "Edit repos…" or a repository that was not found
         open_file(args[args.index("--open") + 1])
     else:
@@ -633,9 +655,8 @@ def tray():
 
     def refresh_loop():
         while True:
-            hide_approved = load_settings(SETTINGS).get("hide_approved") is True
             try:
-                show(rerender(LAST_FETCH, hide_approved) or fetch(hide_approved))
+                show(rerender(LAST_FETCH, *toggles()) or fetch(*toggles()))
             except Exception as e:  # keep the tray alive, and show why the refresh failed
                 reason = (str(e).splitlines() or [type(e).__name__])[0][:80].replace("|", "¦")
                 show(f"⚠️ MR\n---\n{reason}\nRefresh | refresh=true")
