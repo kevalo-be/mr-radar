@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # <xbar.title>MR Radar</xbar.title>
-# <xbar.version>v1.0.2</xbar.version>
+# <xbar.version>v1.0.3</xbar.version>
 # <xbar.author>Kevin Van Loo</xbar.author>
 # <xbar.author.github>kevalo-be/mr-radar</xbar.author.github>
 # <xbar.desc>Your open GitLab merge requests</xbar.desc>
