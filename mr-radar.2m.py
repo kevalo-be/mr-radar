@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # <xbar.title>MR Radar</xbar.title>
-# <xbar.version>v1.0</xbar.version>
+# <xbar.version>v1.0.2</xbar.version>
 # <xbar.author>Kevin Van Loo</xbar.author>
-# <xbar.author.github>kevalo-be</xbar.author.github>
-# <xbar.desc>Lists the open GitLab merge requests you review, follow or author, with notifications.</xbar.desc>
+# <xbar.author.github>kevalo-be/mr-radar</xbar.author.github>
+# <xbar.desc>Your open GitLab merge requests</xbar.desc>
 # <xbar.dependencies>python3,glab</xbar.dependencies>
 # <xbar.abouturl>https://github.com/kevalo-be/mr-radar</xbar.abouturl>
 # <swiftbar.hideRunInTerminal>true</swiftbar.hideRunInTerminal>
@@ -492,11 +492,13 @@ def selftest():
     assert first_action("🔴 a¦b") == ("url", "u")
     assert first_action("15m") == ("act", [str(SELF), "--red-after", "15"])
     real_self = globals()["SELF"]
-    globals()["SELF"] = pathlib.Path("/Users/A B/mr-radar.2m.py")  # a Windows user folder often has a space
+    spaced_self = pathlib.Path("/Users/A B/mr-radar.2m.py")  # a Windows user folder often has a space
+    globals()["SELF"] = spaced_self
     try:
         spaced = parse_menu(render("me", [], timedelta(minutes=30)))[1]
         red_spaced = next(n for n in spaced if n and n["title"].startswith("Red after"))["children"][1]
-        assert action_for(red_spaced["params"]) == ("act", ["/Users/A B/mr-radar.2m.py", "--red-after", "30"]), \
+        # str(): Windows writes this path with backslashes
+        assert action_for(red_spaced["params"]) == ("act", [str(spaced_self), "--red-after", "30"]), \
             "render, parse and action_for round-trip a path with a space: " + str(red_spaced["params"])
     finally:
         globals()["SELF"] = real_self
