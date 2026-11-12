@@ -77,7 +77,9 @@ class NotLoggedIn(Exception):
 def api(path, attempts=3):
     # utf-8: Windows would decode titles and names with its ANSI code page
     try:
-        r = subprocess.run([GLAB, "api", path], capture_output=True, encoding="utf-8", errors="replace", **NO_WINDOW)
+        # timeout: a hung glab would block the Windows tray for good, SwiftBar only loses one run
+        r = subprocess.run([GLAB, "api", path], capture_output=True, encoding="utf-8", errors="replace",
+                           timeout=60, **NO_WINDOW)
     except FileNotFoundError:
         raise RuntimeError("glab is not installed") from None
     if r.returncode:
@@ -258,7 +260,8 @@ def notify(text, href=None):
     if WINDOWS:
         from win11toast import notify as toast
         try:  # a string on_click opens the URL through Windows, also after MR Radar restarts
-            toast(title="MR Radar", body=text, **({"on_click": href} if href else {}))
+            # without a link, win11toast's template makes a click launch a bare "http:"
+            toast(title="MR Radar", body=text, on_click=href or "https://gitlab.com")
         except Exception:  # shortcut: a failing toast is dropped silently, log it if toasts go missing
             pass
         return
@@ -325,7 +328,8 @@ def fetch(hide_approved):
         return (f"🔒 MR\n---\nNot logged in to GitLab\nLog in… | bash={arg(GLAB)} param1=auth param2=login "
                 "terminal=true refresh=true")
     except Exception as e:  # offline, GitLab down: show it, keep the state for the next run
-        return f"⚠️ MR\n---\n{str(e).splitlines()[0][:80]}\nRefresh | refresh=true"
+        reason = (str(e).splitlines() or [type(e).__name__])[0][:80].replace("|", "¦")  # a | would start fake params
+        return f"⚠️ MR\n---\n{reason}\nRefresh | refresh=true"
 
     menu = render(me, rows, red_after, own_rows, hide_approved, repo_rows, missing)
     LAST_FETCH.write_text(json.dumps({"me": me, "rows": rows, "own": own_rows, "repos": repo_rows, "missing": missing,
@@ -487,6 +491,15 @@ def selftest():
         return action_for(next(n for n in flat if n and n["title"].startswith(title))["params"])
     assert first_action("🔴 a¦b") == ("url", "u")
     assert first_action("15m") == ("act", [str(SELF), "--red-after", "15"])
+    real_self = globals()["SELF"]
+    globals()["SELF"] = pathlib.Path("/Users/A B/mr-radar.2m.py")  # a Windows user folder often has a space
+    try:
+        spaced = parse_menu(render("me", [], timedelta(minutes=30)))[1]
+        red_spaced = next(n for n in spaced if n and n["title"].startswith("Red after"))["children"][1]
+        assert action_for(red_spaced["params"]) == ("act", ["/Users/A B/mr-radar.2m.py", "--red-after", "30"]), \
+            "render, parse and action_for round-trip a path with a space: " + str(red_spaced["params"])
+    finally:
+        globals()["SELF"] = real_self
     assert first_action("Hide approved by me") == ("act", [str(SELF), "--hide-approved", "on"])
     assert first_action("Edit repos") == ("act", [str(SELF), "--open", str(REPOS)])
     assert first_action("Refresh") == ("refresh", None)
@@ -577,11 +590,18 @@ def icon_spec(summary):
 
 def tray():
     """The Windows system tray: the SwiftBar menu, parsed into a pystray menu, refreshed every 2 minutes."""
+    import ctypes
     import threading
     import webbrowser
 
     import pystray
     from PIL import Image, ImageDraw, ImageFont
+
+    # one tray per user: a second start, e.g. Startup folder plus a double-click, would send every alert twice
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    instance = kernel32.CreateMutexW(None, False, "mr-radar")  # noqa: F841 - held until the process ends
+    if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
+        return
 
     current = {"text": "⏳ MR\n---\nLoading merge requests…"}
     wake = threading.Event()
@@ -599,6 +619,8 @@ def tray():
         return picture
 
     def show(text):
+        if text == current["text"]:  # rebuilding the menu while it is open can make it vanish
+            return
         current["text"] = text
         summary = text.splitlines()[0]
         icon.icon = image(summary)
@@ -611,7 +633,8 @@ def tray():
             try:
                 show(rerender(LAST_FETCH, hide_approved) or fetch(hide_approved))
             except Exception as e:  # keep the tray alive, and show why the refresh failed
-                show(f"⚠️ MR\n---\n{str(e).splitlines()[0][:80] if str(e) else type(e).__name__}\nRefresh | refresh=true")
+                reason = (str(e).splitlines() or [type(e).__name__])[0][:80].replace("|", "¦")
+                show(f"⚠️ MR\n---\n{reason}\nRefresh | refresh=true")
             wake.wait(120)
             wake.clear()
 
@@ -622,20 +645,22 @@ def tray():
             act(value)
             wake.set()  # a toggle redraws from the last fetch, "Red after" fetches again
         elif kind == "login":
-            subprocess.Popen([GLAB, "auth", "login"], creationflags=subprocess.CREATE_NEW_CONSOLE)
+            login = subprocess.Popen([GLAB, "auth", "login"], creationflags=subprocess.CREATE_NEW_CONSOLE)
+            threading.Thread(target=lambda: (login.wait(), wake.set()), daemon=True).start()  # refresh after the login
         elif kind == "refresh":
             wake.set()
 
     def to_item(node):
         if node is None:
             return pystray.Menu.SEPARATOR
+        title = node["title"].replace("&", "&&")  # a single & marks a keyboard shortcut in a Windows menu
         if node["children"]:
-            return pystray.MenuItem(node["title"], pystray.Menu(*[to_item(c) for c in node["children"]]))
+            return pystray.MenuItem(title, pystray.Menu(*[to_item(c) for c in node["children"]]))
         kind, value = action_for(node["params"])
         if kind is None:
-            return pystray.MenuItem(node["title"], None, enabled=False)
+            return pystray.MenuItem(title, None, enabled=False)
         checked = (lambda _item: True) if node["params"].get("checked") == "true" else None
-        return pystray.MenuItem(node["title"], lambda _icon, _item: run(kind, value), checked=checked)
+        return pystray.MenuItem(title, lambda _icon, _item: run(kind, value), checked=checked)
 
     def items():
         yield from (to_item(node) for node in parse_menu(current["text"])[1])

@@ -11,6 +11,7 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 30
     env:
       PYTHONUTF8: "1"
     steps:
@@ -29,8 +30,10 @@ jobs:
       - name: Build mr-radar.exe
         run: python -m PyInstaller --onefile --noconsole --name mr-radar --hidden-import pystray._win32 --collect-submodules winrt mr-radar.2m.py
 
-      # a --noconsole program returns at once from a plain call, so wait for its exit code
+      # a --noconsole program returns at once from a plain call, so wait for its exit code.
+      # A failure shows a message box that nobody clicks, so the timeout turns a hang into a red run.
       - name: Self-test inside mr-radar.exe
+        timeout-minutes: 3
         shell: pwsh
         run: |
           $p = Start-Process dist\mr-radar.exe -ArgumentList '--selftest' -Wait -PassThru
