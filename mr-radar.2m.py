@@ -201,7 +201,7 @@ def render(me, rows, red_after=RED_AFTER, own=(), hide_approved=False, repos=(),
     """rows, repos: lists of (icon, mr), own: list of (icon, open threads, mr),
     missing: repository paths GitLab does not know. Returns SwiftBar output."""
     rows = sorted(rows, key=lambda r: (ORDER[r[0]], r[1]["updated_at"]))
-    approved = sum(1 for icon, _ in [*rows, *repos] if icon == "🟢")
+    approved = len({mr["id"] for icon, mr in [*rows, *repos] if icon == "🟢"})  # an MR can be in both lists
     toggle = run_self("--hide-approved", "off" if hide_approved else "on") + " terminal=false refresh=true"
     if hide_approved:
         rows = [r for r in rows if r[0] != "🟢"]
@@ -313,9 +313,9 @@ def fetch(hide_approved):
             found = {m["id"]: m for page in pages[:-1] for m in page if m["author"]["username"] != me}
             mrs = [m for m in found.values() if not m["draft"]]
             own = [m for m in pages[-1] if not m["draft"]]
-            # an MR you review or of a followed person stays in the main list, where it counts and notifies
+            # an MR in the main list shows under its repository too, it counts and notifies in the main list only
             in_repos = {m["id"]: m for page in repo_pages if page for m in page
-                        if m["author"]["username"] != me and m["id"] not in found and not m["draft"]}
+                        if m["author"]["username"] != me and not m["draft"]}
             missing = [r for r, page in zip(repos, repo_pages) if page is None]
             red_after = load_red_after(SETTINGS)
             rows = list(zip(pool.map(lambda m: colour(m, me, red_after), mrs), mrs))
@@ -444,6 +444,8 @@ def selftest():
     assert not any("done" in l for l in hidden_repos), "hide approved by me also hides repository MRs"
     assert not any(l.startswith("📁 a/first") for l in hidden_repos), "a repository with only hidden MRs has no header"
     assert any(l.startswith("Show approved by me (2 hidden)") for l in hidden_repos), hidden_repos
+    both = render("me", [repo[0]], RED_AFTER, (), True, repo).splitlines()
+    assert any(l.startswith("Show approved by me (2 hidden)") for l in both), "an MR in both lists counts once"
     assert "Repositories" not in render("me", []).splitlines(), "no section without repositories"
     plain = render("me", []).splitlines()
     help_lines = plain[plain.index("Help") + 1:plain.index("Refresh | refresh=true")]
