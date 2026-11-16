@@ -161,6 +161,15 @@ Click it to show them again.
 "My merge requests" is not affected.
 The plugin saves the choice in `~/.config/mr-radar/settings.json`.
 
+## Re-review after new commits
+
+The menu item "Re-review after new commits" is checked by default.
+Then a merge request you approved turns 🟠 when new commits are pushed after your approval.
+Uncheck the item to keep such a merge request 🟢.
+It then does not count in the menu bar, and it sends no "New commits" notification.
+"Hide approved by me" hides it like any other 🟢 merge request.
+The plugin saves the choice in `~/.config/mr-radar/settings.json`.
+
 ## How it works
 
 The plugin calls the GitLab API through `glab`.

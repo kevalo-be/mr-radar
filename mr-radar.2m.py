@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # <xbar.title>MR Radar</xbar.title>
-# <xbar.version>v1.0.4</xbar.version>
+# <xbar.version>v1.0.5</xbar.version>
 # <xbar.author>Kevin Van Loo</xbar.author>
 # <xbar.author.github>kevalo-be/mr-radar</xbar.author.github>
 # <xbar.desc>Your open GitLab merge requests</xbar.desc>
@@ -197,10 +197,14 @@ def mr_line(icon, mr):
             + tip(f"{mr['references']['full']} · {mr['author']['name']}"))
 
 
-def render(me, rows, red_after=RED_AFTER, own=(), hide_approved=False, repos=(), missing=(), repeat=True):
+def render(me, rows, red_after=RED_AFTER, own=(), hide_approved=False, repos=(), missing=(), repeat=True,
+           rereview=True):
     """rows, repos: lists of (icon, mr), own: list of (icon, open threads, mr),
-    missing: repository paths GitLab does not know, repeat: show MRs of rows under their repository too.
-    Returns SwiftBar output."""
+    missing: repository paths GitLab does not know, repeat: show MRs of rows under their repository too,
+    rereview: False shows an MR with new commits after your approval as approved. Returns SwiftBar output."""
+    if not rereview:
+        rows = [("🟢" if icon == "🟠" else icon, mr) for icon, mr in rows]
+        repos = [("🟢" if icon == "🟠" else icon, mr) for icon, mr in repos]
     rows = sorted(rows, key=lambda r: (ORDER[r[0]], r[1]["updated_at"]))
     if not repeat:
         in_rows = {mr["id"] for _, mr in rows}
@@ -239,7 +243,9 @@ def render(me, rows, red_after=RED_AFTER, own=(), hide_approved=False, repos=(),
               f"Edit repos… | {run_self('--open', REPOS)} terminal=false",
               (f"Show approved by me ({approved} hidden)" if hide_approved else f"Hide approved by me ({approved})") + f" | {toggle}",
               f"Also show reviews under repositories | {run_self('--repeat-in-repos', 'off' if repeat else 'on')} "
-              f"terminal=false refresh=true checked={str(repeat).lower()}"]
+              f"terminal=false refresh=true checked={str(repeat).lower()}",
+              f"Re-review after new commits | {run_self('--rereview', 'off' if rereview else 'on')} "
+              f"terminal=false refresh=true checked={str(rereview).lower()}"]
     minutes = red_after // timedelta(minutes=1)
     label = next((l for l, m in RED_AFTER_CHOICES.items() if m == minutes), f"{minutes}m")
     lines.append(f"Red after: {label}")
@@ -284,7 +290,7 @@ def mark_rerender(path):
     path.write_text(json.dumps({**data, "rerender": True}))
 
 
-def rerender(path, hide_approved, repeat):
+def rerender(path, hide_approved, repeat, rereview):
     """The menu from the last fetch when a toggle click asked for it, else None: fetch from GitLab."""
     try:
         data = json.loads(path.read_text())
@@ -294,20 +300,21 @@ def rerender(path, hide_approved, repeat):
         return None
     path.write_text(json.dumps({**data, "rerender": False}))
     return render(data["me"], data["rows"], timedelta(minutes=data["red_after_minutes"]), data["own"], hide_approved,
-                  data.get("repos", []), data.get("missing", []), repeat)
+                  data.get("repos", []), data.get("missing", []), repeat, rereview)
 
 
 def toggles():
-    """(hide approved by me, also show reviews under repositories) from the settings file."""
+    """(hide approved by me, also show reviews under repositories, re-review after new commits) from the settings."""
     settings = load_settings(SETTINGS)
-    return settings.get("hide_approved") is True, settings.get("repeat_in_repos") is not False
+    return (settings.get("hide_approved") is True, settings.get("repeat_in_repos") is not False,
+            settings.get("rereview") is not False)
 
 
 def main():
     print(rerender(LAST_FETCH, *toggles()) or fetch(*toggles()))
 
 
-def fetch(hide_approved, repeat):
+def fetch(hide_approved, repeat, rereview):
     """Calls GitLab, sends the notifications, saves the state, and returns the menu text."""
     CACHE.mkdir(parents=True, exist_ok=True)  # %LOCALAPPDATA%\mr-radar does not exist on a new Windows install
     state = json.loads(STATE.read_text()) if STATE.exists() else {"seen": [], "logged_in": True}
@@ -342,10 +349,10 @@ def fetch(hide_approved, repeat):
         reason = (str(e).splitlines() or [type(e).__name__])[0][:80].replace("|", "¦")  # a | would start fake params
         return f"⚠️ MR\n---\n{reason}\nRefresh | refresh=true"
 
-    menu = render(me, rows, red_after, own_rows, hide_approved, repo_rows, missing, repeat)
+    menu = render(me, rows, red_after, own_rows, hide_approved, repo_rows, missing, repeat, rereview)
     LAST_FETCH.write_text(json.dumps({"me": me, "rows": rows, "own": own_rows, "repos": repo_rows, "missing": missing,
                                       "red_after_minutes": red_after // timedelta(minutes=1)}))
-    todo = {f"{mr['id']}{icon}": (icon, mr) for icon, mr in rows if icon in ("🔴", "🟠")}
+    todo = {f"{mr['id']}{icon}": (icon, mr) for icon, mr in rows if icon == "🔴" or icon == "🟠" and rereview}
     for key in todo.keys() - set(state["seen"]):
         icon, mr = todo[key]
         notify(f"{'Review' if icon == '🔴' else 'New commits'}: {mr['title']}", mr["web_url"])
@@ -434,13 +441,13 @@ def selftest():
     with tempfile.TemporaryDirectory() as tmp:
         last = pathlib.Path(tmp) / "last-fetch.json"
         mark_rerender(last)
-        assert not last.exists() and rerender(last, True, True) is None, "without a fetch, a click leaves the fetch to SwiftBar"
+        assert not last.exists() and rerender(last, True, True, True) is None, "without a fetch, a click leaves the fetch to SwiftBar"
         last.write_text(json.dumps({"me": "me", "rows": mixed, "own": [], "red_after_minutes": 60}))
-        assert rerender(last, True, True) is None, "a scheduled run fetches from GitLab"
+        assert rerender(last, True, True, True) is None, "a scheduled run fetches from GitLab"
         mark_rerender(last)
-        quick = rerender(last, True, True).splitlines()
+        quick = rerender(last, True, True, True).splitlines()
         assert "Show approved by me (2 hidden)" in "\n".join(quick), "a click redraws with the new setting: " + str(quick)
-        assert rerender(last, True, True) is None, "only the run right after the click skips GitLab"
+        assert rerender(last, True, True, True) is None, "only the run right after the click skips GitLab"
     in_repo = lambda path, i, icon, t: (icon, {**mr(i, t, str(i)), "references": {"full": f"{path}!{i}"}})
     repo = [in_repo("z/second", 22, "🟢", "second done"), in_repo("a/first", 21, "🟢", "first done"),
             in_repo("z/second", 23, "🔴", "second red")]
@@ -464,6 +471,17 @@ def selftest():
     assert sum("second red" in l for l in once) == 1, "repeat off: an MR of the main list shows only there"
     assert any(l.startswith("📁 z/second") for l in once), "the other MRs of the repository stay"
     assert any(l.endswith("param2=on terminal=false refresh=true checked=false") for l in once)
+    pushed = [("🟠", mr(5, "pushed", "5"))]
+    pushed_repo = [("🟠", {**mr(6, "repo pushed", "6"), "references": {"full": "a/first!6"}})]
+    assert render("me", pushed, RED_AFTER, (), False, pushed_repo).splitlines()[0] == "🟠 1"
+    calm = render("me", pushed, RED_AFTER, (), False, pushed_repo, rereview=False).splitlines()
+    assert calm[0] == "🟢", "re-review off: new commits after your approval do not count: " + calm[0]
+    assert calm[2].startswith("🟢 pushed") and any(l.startswith("🟢 repo pushed") for l in calm), calm
+    assert any(l.startswith("Hide approved by me (2)") for l in calm), "re-review off: such an MR counts as approved"
+    assert any(l.startswith("Re-review after new commits") and l.endswith("param2=on terminal=false refresh=true checked=false")
+               for l in calm)
+    assert not any(l.startswith(("🟢 pushed", "🟢 repo pushed")) for l in render("me", pushed, RED_AFTER, (), True, pushed_repo, rereview=False).splitlines()), \
+        "re-review off and hide approved on: such an MR is hidden"
     assert "Repositories" not in render("me", []).splitlines(), "no section without repositories"
     plain = render("me", []).splitlines()
     help_lines = plain[plain.index("Help") + 1:plain.index("Refresh | refresh=true")]
@@ -525,6 +543,7 @@ def selftest():
     assert first_action("Hide approved by me") == ("act", [str(SELF), "--hide-approved", "on"])
     assert first_action("Edit repos") == ("act", [str(SELF), "--open", str(REPOS)])
     assert first_action("Also show reviews") == ("act", [str(SELF), "--repeat-in-repos", "off"])
+    assert first_action("Re-review after new commits") == ("act", [str(SELF), "--rereview", "off"])
     assert first_action("Refresh") == ("refresh", None)
     assert first_action("My merge requests") == (None, None), "a section header does nothing"
     login = parse_menu(f"🔒 MR\n---\nLog in… | bash={arg(GLAB)} param1=auth param2=login terminal=true refresh=true")
@@ -550,6 +569,9 @@ def act(args):
         mark_rerender(LAST_FETCH)  # SwiftBar's refresh=true then redraws from the last fetch
     elif "--repeat-in-repos" in args:  # clicked "Also show reviews under repositories"
         save_setting(SETTINGS, "repeat_in_repos", args[args.index("--repeat-in-repos") + 1] == "on")
+        mark_rerender(LAST_FETCH)
+    elif "--rereview" in args:  # clicked "Re-review after new commits"
+        save_setting(SETTINGS, "rereview", args[args.index("--rereview") + 1] == "on")
         mark_rerender(LAST_FETCH)
     elif "--open" in args:  # clicked "Edit people…", "Edit repos…" or a repository that was not found
         open_file(args[args.index("--open") + 1])
