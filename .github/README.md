@@ -138,7 +138,7 @@ A merge request with open comments shows their number, for example `💬 2`.
 | 🟠 | The merge request has no open comments, but it still needs approvals. |
 | 🟢 | The merge request has no open comments, and it is approved. |
 
-Your draft merge requests are not listed.
+Your draft merge requests are listed too. Their title starts with "Draft:".
 The section is hidden when nothing is left to list.
 The menu item "Open my merge requests" opens the GitLab dashboard with your own merge requests.
 
@@ -193,7 +193,6 @@ A click on "Hide approved by me" redraws the menu from that file, so the menu up
 - Projects without approval rules count a merge request as approved right away. Your merge request in such a project turns 🟢 as soon as its threads are resolved. This happens even when nobody reviewed it.
 - Only the first 100 threads of a merge request are counted.
 - Only the first 100 open merge requests of a followed repository are listed.
-- When you mark your own draft as ready, its existing threads notify you as new.
 
 ## Test
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # <xbar.title>MR Radar</xbar.title>
-# <xbar.version>v1.0.5</xbar.version>
+# <xbar.version>v1.0.6</xbar.version>
 # <xbar.author>Kevin Van Loo</xbar.author>
 # <xbar.author.github>kevalo-be/mr-radar</xbar.author.github>
 # <xbar.desc>Your open GitLab merge requests</xbar.desc>
@@ -330,7 +330,7 @@ def fetch(hide_approved, repeat, rereview):
             # an MR by a followed person can also have you as reviewer: keep it once
             found = {m["id"]: m for page in pages[:-1] for m in page if m["author"]["username"] != me}
             mrs = [m for m in found.values() if not m["draft"]]
-            own = [m for m in pages[-1] if not m["draft"]]
+            own = pages[-1]  # your drafts too: GitLab starts their title with "Draft:"
             # an MR in the main list shows under its repository too, it counts and notifies in the main list only
             in_repos = {m["id"]: m for page in repo_pages if page for m in page
                         if m["author"]["username"] != me and not m["draft"]}
