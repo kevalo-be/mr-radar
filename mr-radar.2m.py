@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # <xbar.title>MR Radar</xbar.title>
-# <xbar.version>v1.0.6</xbar.version>
+# <xbar.version>v1.0.7</xbar.version>
 # <xbar.author>Kevin Van Loo</xbar.author>
 # <xbar.author.github>kevalo-be/mr-radar</xbar.author.github>
 # <xbar.desc>Your open GitLab merge requests</xbar.desc>
@@ -30,7 +30,7 @@ STATE = CACHE / "mr-radar.json"
 LAST_FETCH = CACHE / "mr-radar-last-fetch.json"  # redraws a toggle click without GitLab
 SELF = pathlib.Path(__file__).resolve()
 GIT = shutil.which("git", path="/opt/homebrew/bin:/usr/local/bin:/usr/bin") or "git"
-VERSION = "v1.0.6"  # equal to xbar.version above, the self-test checks it
+VERSION = "v1.0.7"  # equal to xbar.version above, the self-test checks it
 RELEASES = "https://github.com/kevalo-be/mr-radar/releases/latest"
 UPDATE = CACHE / "mr-radar-update.json"  # when GitHub was last asked for a release, and which release notified
 # without CREATE_NO_WINDOW, every glab call from the Windows tray flashes a console window
