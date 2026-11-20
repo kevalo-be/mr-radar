@@ -60,6 +60,7 @@ HELP = [
     "🔴 Has open comments",
     "🟠 No open comments, still needs approvals",
     "🟢 No open comments, and approved",
+    "⚪ Draft",
     "---",
     "💬 Number of open comment threads on your merge requests",
     "📁 A followed repository: click to open its merge requests",
@@ -109,6 +110,8 @@ def mine(mr):
     base = f"projects/{mr['project_id']}/merge_requests/{mr['iid']}"
     # shortcut: counts the first 100 threads only, paginate if an MR ever has more
     threads = open_threads(api(f"{base}/discussions?per_page=100"))
+    if mr["draft"]:  # a draft stays grey, its threads still show as 💬
+        return "⚪", threads
     if threads:
         return "🔴", threads
     return ("🟢" if api(f"{base}/approvals")["approved"] else "🟠"), threads
@@ -557,6 +560,15 @@ def selftest():
     assert icon_spec("🔒 MR") == ("#80868b", "!") and icon_spec("⚠️ MR")[1] == "?"
     if WINDOWS:  # the .exe must bundle the tray libraries, which macOS never imports
         import pystray, PIL, win11toast  # noqa: F401
+    real_api = globals()["api"]
+    thread = {"notes": [{"resolvable": True, "resolved": False}]}
+    globals()["api"] = lambda path: [thread] if "discussions" in path else {"approved": True}
+    try:
+        draft = {"project_id": 1, "iid": 2, "draft": True}
+        assert mine(draft) == ("⚪", [thread]), "a draft stays grey, also with open threads"
+        assert mine({**draft, "draft": False}) == ("🔴", [thread])
+    finally:
+        globals()["api"] = real_api
     print("selftest ok")
 
 

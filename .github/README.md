@@ -137,6 +137,7 @@ A merge request with open comments shows their number, for example `💬 2`.
 | 🔴 | The merge request has open comments. |
 | 🟠 | The merge request has no open comments, but it still needs approvals. |
 | 🟢 | The merge request has no open comments, and it is approved. |
+| ⚪ | The merge request is a draft. It stays ⚪ until you mark it as ready. |
 
 Your draft merge requests are listed too. Their title starts with "Draft:".
 The section is hidden when nothing is left to list.
