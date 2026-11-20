@@ -27,6 +27,12 @@ jobs:
       - name: Self-test
         run: python mr-radar.2m.py --selftest
 
+      # an .exe that reports an older version than its tag would offer itself as an update
+      - name: Check that VERSION matches the tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: grep -q 'VERSION = "${{ github.ref_name }}"' mr-radar.2m.py || { echo "VERSION in mr-radar.2m.py is not ${{ github.ref_name }}"; exit 1; }
+
       - name: Build mr-radar.exe
         run: python -m PyInstaller --onefile --noconsole --name mr-radar --hidden-import pystray._win32 --collect-submodules winrt mr-radar.2m.py
 

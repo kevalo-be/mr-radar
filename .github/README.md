@@ -171,6 +171,15 @@ It then does not count in the menu bar, and it sends no "New commits" notificati
 "Hide approved by me" hides it like any other 🟢 merge request.
 The plugin saves the choice in `~/.config/mr-radar/settings.json`.
 
+## Updates
+
+Once a day, MR Radar looks for a newer release.
+On the Mac, it asks git for the newest tag of the repository. On Windows, it asks GitHub for the latest release.
+When that release is newer than the running version, the menu shows `⬆️ Update to v1.2.3`, and you get one notification.
+On the Mac, a click runs `git pull` in the plugin folder, and SwiftBar then runs the new version.
+The pull fails when you changed files in that folder. The notification then shows the git error.
+On Windows, a click opens the release page. Download the new `mr-radar.exe` and replace the old one.
+
 ## How it works
 
 The plugin calls the GitLab API through `glab`.
@@ -204,7 +213,8 @@ A click on "Hide approved by me" redraws the menu from that file, so the menu up
 ## Release the Windows program
 
 GitHub Actions builds `mr-radar.exe` on Windows. The workflow is `.github/workflows/windows-exe.yml`.
-Push a tag that starts with `v` to publish a release with the program:
+First set the new version in `mr-radar.2m.py`, in `xbar.version` and in `VERSION`. The self-test and the workflow check that they match.
+Then push a tag with that version to publish a release with the program:
 
 ```sh
 git tag v1.0.0

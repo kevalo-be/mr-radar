@@ -19,6 +19,7 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote, urlencode
+from urllib.request import urlopen
 
 WINDOWS = sys.platform == "win32"
 # SwiftBar runs plugins without Homebrew on the PATH: Apple Silicon, then Intel.
@@ -28,6 +29,10 @@ CACHE = (pathlib.Path(os.environ.get("LOCALAPPDATA") or pathlib.Path.home() / "A
 STATE = CACHE / "mr-radar.json"
 LAST_FETCH = CACHE / "mr-radar-last-fetch.json"  # redraws a toggle click without GitLab
 SELF = pathlib.Path(__file__).resolve()
+GIT = shutil.which("git", path="/opt/homebrew/bin:/usr/local/bin:/usr/bin") or "git"
+VERSION = "v1.0.6"  # equal to xbar.version above, the self-test checks it
+RELEASES = "https://github.com/kevalo-be/mr-radar/releases/latest"
+UPDATE = CACHE / "mr-radar-update.json"  # when GitHub was last asked for a release, and which release notified
 # without CREATE_NO_WINDOW, every glab call from the Windows tray flashes a console window
 NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if WINDOWS else {}
 PEOPLE = pathlib.Path.home() / ".config/mr-radar/people"
@@ -64,6 +69,7 @@ HELP = [
     "---",
     "💬 Number of open comment threads on your merge requests",
     "📁 A followed repository: click to open its merge requests",
+    "⬆️ A new version of MR Radar: click to update",
     "🔒 Not logged in to GitLab",
     "⚠️ GitLab could not be reached, or a repository was not found",
     "---",
@@ -201,10 +207,11 @@ def mr_line(icon, mr):
 
 
 def render(me, rows, red_after=RED_AFTER, own=(), hide_approved=False, repos=(), missing=(), repeat=True,
-           rereview=True):
+           rereview=True, update=None):
     """rows, repos: lists of (icon, mr), own: list of (icon, open threads, mr),
     missing: repository paths GitLab does not know, repeat: show MRs of rows under their repository too,
-    rereview: False shows an MR with new commits after your approval as approved. Returns SwiftBar output."""
+    rereview: False shows an MR with new commits after your approval as approved,
+    update: a newer release tag on GitHub. Returns SwiftBar output."""
     if not rereview:
         rows = [("🟢" if icon == "🟠" else icon, mr) for icon, mr in rows]
         repos = [("🟢" if icon == "🟠" else icon, mr) for icon, mr in repos]
@@ -240,7 +247,11 @@ def render(me, rows, red_after=RED_AFTER, own=(), hide_approved=False, repos=(),
         lines.append(f"📁 {path} | href=https://gitlab.com/{path}/-/merge_requests")
         lines += [mr_line(icon, mr) for icon, mr in sorted(group, key=lambda r: (ORDER[r[0]], r[1]["updated_at"]))]
     lines += [f"⚠️ {r}: not found | {run_self('--open', REPOS)} terminal=false" for r in missing]
-    lines += ["---", f"Open GitLab dashboard | href={DASHBOARD.format(me)}",
+    lines.append("---")
+    if update:  # the Mac pulls the plugin folder, Windows downloads a new .exe
+        lines.append(f"⬆️ Update to {update} | " + (f"href={RELEASES}" if WINDOWS
+                                                   else f"{run_self('--update')} terminal=false refresh=true"))
+    lines += [f"Open GitLab dashboard | href={DASHBOARD.format(me)}",
               f"Open my merge requests | href={MY_DASHBOARD.format(me)}",
               f"Edit people… | {run_self('--open', PEOPLE)} terminal=false",
               f"Edit repos… | {run_self('--open', REPOS)} terminal=false",
@@ -285,6 +296,46 @@ def notify(text, href=None):
     subprocess.run(["/usr/bin/open", "-g", "swiftbar://notify?" + urlencode(params, quote_via=quote)])
 
 
+def version_key(tag):
+    return tuple(int(n) for n in re.findall(r"\d+", tag))
+
+
+def newer(tag, than):
+    return version_key(tag) > version_key(than)
+
+
+def latest_release():
+    url = "https://api.github.com/repos/kevalo-be/mr-radar/releases/latest"
+    if WINDOWS:
+        with urlopen(url, timeout=10) as answer:
+            return json.load(answer)["tag_name"]
+    # the Mac runs from a git clone: its newest tag is the newest release
+    done = subprocess.run([GIT, "-C", str(SELF.parent), "ls-remote", "--tags", "--refs", "origin"],
+                          capture_output=True, text=True, check=True, timeout=30)
+    return max(re.findall(r"refs/tags/(v[\d.]+)$", done.stdout, re.M), key=version_key)
+
+
+def available_update(path, now=None):
+    """The newer release tag on GitHub, or None. Asks GitHub at most once a day, and notifies once per release."""
+    now = now or datetime.now(timezone.utc)
+    try:
+        cached = json.loads(path.read_text())
+    except (FileNotFoundError, ValueError):
+        cached = {}
+    if cached.get("checked_at", "") < (now - timedelta(days=1)).isoformat():
+        try:
+            cached["latest"], cached["checked_at"] = latest_release(), now.isoformat()
+        except Exception:  # GitHub down or rate-limited: the next run asks again
+            pass
+    latest = cached.get("latest")
+    update = latest if latest and newer(latest, VERSION) else None
+    if update and cached.get("notified") != update:
+        notify(f"MR Radar {update} is available", RELEASES)
+        cached["notified"] = update
+    path.write_text(json.dumps(cached))
+    return update
+
+
 def mark_rerender(path):
     try:
         data = json.loads(path.read_text())
@@ -303,7 +354,7 @@ def rerender(path, hide_approved, repeat, rereview):
         return None
     path.write_text(json.dumps({**data, "rerender": False}))
     return render(data["me"], data["rows"], timedelta(minutes=data["red_after_minutes"]), data["own"], hide_approved,
-                  data.get("repos", []), data.get("missing", []), repeat, rereview)
+                  data.get("repos", []), data.get("missing", []), repeat, rereview, data.get("update"))
 
 
 def toggles():
@@ -352,9 +403,10 @@ def fetch(hide_approved, repeat, rereview):
         reason = (str(e).splitlines() or [type(e).__name__])[0][:80].replace("|", "¦")  # a | would start fake params
         return f"⚠️ MR\n---\n{reason}\nRefresh | refresh=true"
 
-    menu = render(me, rows, red_after, own_rows, hide_approved, repo_rows, missing, repeat, rereview)
+    update = available_update(UPDATE)
+    menu = render(me, rows, red_after, own_rows, hide_approved, repo_rows, missing, repeat, rereview, update)
     LAST_FETCH.write_text(json.dumps({"me": me, "rows": rows, "own": own_rows, "repos": repo_rows, "missing": missing,
-                                      "red_after_minutes": red_after // timedelta(minutes=1)}))
+                                      "red_after_minutes": red_after // timedelta(minutes=1), "update": update}))
     todo = {f"{mr['id']}{icon}": (icon, mr) for icon, mr in rows if icon == "🔴" or icon == "🟠" and rereview}
     for key in todo.keys() - set(state["seen"]):
         icon, mr = todo[key]
@@ -560,6 +612,32 @@ def selftest():
     assert icon_spec("🔒 MR") == ("#80868b", "!") and icon_spec("⚠️ MR")[1] == "?"
     if WINDOWS:  # the .exe must bundle the tray libraries, which macOS never imports
         import pystray, PIL, win11toast  # noqa: F401
+    if not getattr(sys, "frozen", False):  # the .exe has no source file to read
+        assert f"<xbar.version>{VERSION}</xbar.version>" in SELF.read_text(encoding="utf-8"), "VERSION matches the header"
+    assert newer("v1.0.10", "v1.0.9") and not newer("v1.0.6", "v1.0.6") and not newer("v1.0.5", "v1.0.6")
+    real_latest, real_notify = globals()["latest_release"], globals()["notify"]
+    asked, notified = [], []
+    globals()["latest_release"] = lambda: asked.append(1) or "v99.0.0"
+    globals()["notify"] = lambda text, href=None: notified.append((text, href))
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            path, day = pathlib.Path(tmp) / "update.json", datetime(2026, 11, 20, 9, tzinfo=timezone.utc)
+            assert available_update(path, day) == "v99.0.0" and len(asked) == 1
+            assert available_update(path, day + timedelta(hours=23)) == "v99.0.0" and len(asked) == 1, "once a day"
+            assert notified == [("MR Radar v99.0.0 is available", RELEASES)], "one notification per release"
+            available_update(path, day + timedelta(hours=25))
+            assert len(asked) == 2 and len(notified) == 1, "a day later GitHub is asked again, without a notification"
+            globals()["latest_release"] = lambda: 1 / 0
+            assert available_update(path, day + timedelta(days=3)) == "v99.0.0", "a failed ask keeps the last answer"
+            globals()["latest_release"] = lambda: asked.append(1) or VERSION
+            assert available_update(path, day + timedelta(days=3)) is None and len(asked) == 3, \
+                "after a failed ask, the next run asks again"
+    finally:
+        globals()["latest_release"], globals()["notify"] = real_latest, real_notify
+    with_update = render("me", [], update="v99.0.0").splitlines()
+    update_line = next(l for l in with_update if l.startswith("⬆️ Update to v99.0.0"))
+    assert update_line.endswith(f"href={RELEASES}" if WINDOWS else f"{run_self('--update')} terminal=false refresh=true")
+    assert not any(l.startswith("⬆️") for l in render("me", []).splitlines())
     real_api = globals()["api"]
     thread = {"notes": [{"resolvable": True, "resolved": False}]}
     globals()["api"] = lambda path: [thread] if "discussions" in path else {"approved": True}
@@ -585,6 +663,11 @@ def act(args):
     elif "--rereview" in args:  # clicked "Re-review after new commits"
         save_setting(SETTINGS, "rereview", args[args.index("--rereview") + 1] == "on")
         mark_rerender(LAST_FETCH)
+    elif "--update" in args:  # clicked "Update to …" on the Mac
+        done = subprocess.run([GIT, "-C", str(SELF.parent), "pull", "--ff-only"],
+                              capture_output=True, encoding="utf-8", errors="replace")
+        if done.returncode:  # local changes or no git clone: say why
+            notify("Update failed: " + ((done.stderr or done.stdout).strip().splitlines() or ["git pull failed"])[0])
     elif "--open" in args:  # clicked "Edit people…", "Edit repos…" or a repository that was not found
         open_file(args[args.index("--open") + 1])
     else:
